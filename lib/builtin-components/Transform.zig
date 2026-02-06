@@ -7,6 +7,12 @@ position: loom.Vector3 = loom.Vec3(0, 0, 0),
 rotation: f32 = 0,
 scale: loom.Vector2 = loom.Vec2(64, 64),
 
+pub const zero: Self = .{
+    .position = .init(0, 0, 0),
+    .rotation = 0,
+    .scale = .init(0, 0),
+};
+
 pub fn eql(self: Self, other: Self) bool {
     if (self.position.equals(other.position) == 0) return false;
     return eqlSkipPosition(self, other);

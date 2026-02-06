@@ -43,6 +43,13 @@ pub fn Array(comptime T: type) type {
             };
         }
 
+        pub fn initWithSize(allocator: std.mem.Allocator, size: usize) !Self {
+            return Self{
+                .alloc = allocator,
+                .slice = try allocator.alloc(T, size),
+            };
+        }
+
         pub fn fromArrayList(allocator: Allocator, arr: std.ArrayList(T)) !Self {
             return Self{
                 .slice = try cloneArrayListToOwnedSlice(T, allocator, arr),

@@ -33,6 +33,7 @@ pub const Vector3 = rl.Vector3;
 pub const Vector4 = rl.Vector4;
 pub const Rectangle = rl.Rectangle;
 pub const Color = rl.Color;
+pub const Texture = rl.Texture;
 
 pub const ecs = @import("ecs/ecs.zig");
 pub const GlobalBehaviour = ecs.Behaviour(Scene);
@@ -65,6 +66,7 @@ pub const display = @import("display.zig");
 pub const time = @import("time.zig");
 pub const input = @import("input.zig");
 pub const ui = @import("ui/ui.zig");
+pub const sort = @import("sort.zig");
 
 pub const keyboard = input.keyboard;
 pub const mouse = input.mouse;

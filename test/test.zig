@@ -7,4 +7,5 @@ test {
     _ = @import("types/types.zig");
     _ = @import("ecs/ecs.zig");
     _ = @import("eventloop/eventloop.zig");
+    _ = @import("sort.zig");
 }
