@@ -1,8 +1,8 @@
 const std = @import("std");
-const lm = @import("loom");
+const lm_core = @import("lm_core");
 
-const List = lm.types.List;
-const Array = lm.types.Array;
+const List = lm_core.types.List;
+const Array = lm_core.types.Array;
 
 const expect = std.testing.expect;
 
@@ -186,7 +186,7 @@ test "toArrayList" {
     var my_array = try Array(u8).init(std.testing.allocator, &.{ 1, 2, 3 });
     defer my_array.deinit();
 
-    var my_array_list = try my_array.toArrayList();
+    var my_array_list = try my_array.cloneToArrayList();
     defer my_array_list.deinit(std.testing.allocator);
 
     try std.testing.expectEqualSlices(u8, my_array.items(), my_array_list.items);
@@ -197,7 +197,7 @@ test "toList" {
     var my_array = try Array(u8).init(std.testing.allocator, &.{ 1, 2, 3 });
     defer my_array.deinit();
 
-    var my_list = try my_array.toList();
+    var my_list = try my_array.cloneToList();
     defer my_list.deinit();
 
     try std.testing.expectEqualSlices(u8, my_array.items(), my_list.items());

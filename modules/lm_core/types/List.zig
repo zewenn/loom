@@ -33,7 +33,7 @@ pub fn List(comptime T: type) type {
 
         pub fn fromArray(array: Array(T)) !Self {
             return Self{
-                .arrlist = try array.toArrayList(),
+                .arrlist = try array.cloneToArrayList(),
                 .allocator = array.alloc,
             };
         }

@@ -134,18 +134,14 @@ pub fn Array(comptime T: type) type {
         }
 
         pub fn cloneToArrayList(self: Self) !std.ArrayList(T) {
-            const cloned_items = try self.cloneToOwnedSlice();
-
             var list = try std.ArrayList(T).initCapacity(self.alloc, self.len());
-            try list.appendSlice(self.alloc, cloned_items);
+            try list.appendSlice(self.alloc, self.items());
 
             return list;
         }
 
         pub inline fn cloneToList(self: Self) !List(T) {
-            const cloned_items = try self.cloneToOwnedSlice();
-
-            return List(T).initWithItems(self.alloc, cloned_items);
+            return List(T).initWithItems(self.alloc, self.items());
         }
 
         pub inline fn map(self: Self, R: type, mapping_function: iterator_functions.MappingFn(T, R)) !Array(R) {

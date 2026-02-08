@@ -1,8 +1,8 @@
 const std = @import("std");
-const lm = @import("loom");
+const lm_core = @import("lm_core");
 
-const List = lm.types.List;
-const Array = lm.types.Array;
+const List = lm_core.types.List;
+const Array = lm_core.types.Array;
 
 const expect = std.testing.expect;
 

@@ -1,10 +1,10 @@
 const std = @import("std");
-const lm = @import("loom");
+const lm_core = @import("lm_core");
 
-const map = lm.types.iterator_functions.map;
-const reduce = lm.types.iterator_functions.reduce;
-const filter = lm.types.iterator_functions.filter;
-const forEach = lm.types.iterator_functions.forEach;
+const map = lm_core.types.iterator_functions.map;
+const reduce = lm_core.types.iterator_functions.reduce;
+const filter = lm_core.types.iterator_functions.filter;
+const forEach = lm_core.types.iterator_functions.forEach;
 
 test map {
     const mapFunc = struct {
