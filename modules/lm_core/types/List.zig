@@ -76,15 +76,24 @@ pub fn List(comptime T: type) type {
 
         /// Extend the list by 1 element. Allocates more memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn append(self: *Self, item: T) !void {
+        pub inline fn append(self: *Self, item: T) !void {
             try self.arrlist.append(self.allocator, item);
         }
 
         /// Append the slice of items to the list. Allocates more
         /// memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn appendSlice(self: *Self, new_items: []const T) !void {
+        pub inline fn appendSlice(self: *Self, new_items: []const T) !void {
             try self.arrlist.appendSlice(self.allocator, new_items);
+        }
+
+        /// Append a value to the list `n` times.
+        /// Allocates more memory as necessary.
+        /// Invalidates element pointers if additional memory is needed.
+        /// The function is inline so that a comptime-known `value` parameter will
+        /// have a more optimal memset codegen in case it has a repeated byte pattern.
+        pub inline fn appendNTimes(self: *Self, value: T, n: usize) !void {
+            try self.arrlist.appendNTimes(self.allocator, value, n);
         }
 
         /// Invalidates all element pointers.

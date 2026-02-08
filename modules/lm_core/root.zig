@@ -16,11 +16,12 @@ pub fn comptimeAssert(comptime statement: bool, comptime fail_msg: []const u8) v
     @compileError(fail_msg);
 }
 
-pub fn assert(statement: bool, comptime fail_msg: []const u8) void {
+pub inline fn assert(statement: bool, comptime fail_msg: []const u8) void {
     assertFmt(statement, fail_msg, .{});
 }
 
 pub fn assertFmt(statement: bool, comptime fail_msg: []const u8, fmt: anytype) void {
+    if (builtin.mode == .ReleaseFast or builtin.mode == .ReleaseSmall) return;
     if (statement) return;
 
     std.log.err(fail_msg, fmt);
