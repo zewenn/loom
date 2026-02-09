@@ -17,6 +17,22 @@ pub inline fn ForEachFn(T: type) type {
     return fn (item: T) anyerror!void;
 }
 
+pub inline fn ComptimeMappingFn(comptime T: type, comptime R: type) type {
+    return fn (comptime T) ?R;
+}
+
+pub inline fn ComptimeReduceFn(comptime T: type, comptime R: type) type {
+    return fn (comptime accumulator: R, comptime current: T) R;
+}
+
+pub inline fn ComptimeFilterCriteriaFn(comptime T: type) type {
+    return fn (comptime item: T) bool;
+}
+
+pub inline fn ComptimeForEachFn(comptime T: type) type {
+    return fn (comptime item: T) anyerror!void;
+}
+
 pub fn map(T: type, R: type, allocator: Allocator, array: []T, mapping_function: MappingFn(T, R)) ![]R {
     var list: std.ArrayList(R) = .empty;
 
