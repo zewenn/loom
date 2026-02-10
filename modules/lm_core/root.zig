@@ -6,6 +6,7 @@ pub const types = @import("types/types.zig");
 pub const Array = types.Array;
 pub const List = types.List;
 pub const ComptimeList = types.ComptimeList;
+pub const ByteList = types.ByteList;
 pub const coerceTo = types.coerceTo;
 pub const iterator_functions = types.iterator_functions;
 
@@ -33,4 +34,9 @@ pub fn deprecated(comptime msg: []const u8) void {
     if (builtin.is_test) return;
 
     @compileError("[DEPRECATED] " ++ msg);
+}
+
+pub fn ptrCast(comptime T: type, data: *anyopaque) *T {
+    if (@alignOf(T) == 0) return @as(*T, @ptrCast(data));
+    return @ptrCast(@alignCast(data));
 }

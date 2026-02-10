@@ -1,6 +1,7 @@
-pub const Array = @import("Array.zig").Array;
-pub const List = @import("List.zig").List;
-pub const ComptimeList = @import("ComptimeList.zig").ComptimeList;
+pub const Array = @import("array.zig").Array;
+pub const List = @import("list.zig").List;
+pub const ComptimeList = @import("comptime_list.zig").ComptimeList;
+pub const ByteList = @import("ByteList.zig");
 
 pub const coerceTo = @import("type_switcher.zig").coerceTo;
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = @import("std").mem.Allocator;
 
-const Array = @import("Array.zig").Array;
+const Array = @import("array.zig").Array;
 const coerceTo = @import("type_switcher.zig").coerceTo;
 
 const iterator_functions = @import("iterator_functions.zig");
@@ -179,6 +179,10 @@ pub fn List(comptime T: type) type {
 
         pub inline fn shrinkAndFree(self: *Self, new_len: usize) void {
             self.arrlist.shrinkAndFree(self.allocator, new_len);
+        }
+
+        pub inline fn shrinkRetainingCapacity(self: *Self, new_len: usize) void {
+            self.arrlist.shrinkRetainingCapacity(new_len);
         }
 
         pub inline fn toOwnedSlice(self: *Self) ![]T {

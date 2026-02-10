@@ -1,7 +1,8 @@
 test {
-    _ = @import("List.zig");
-    _ = @import("Array.zig");
+    _ = @import("list.zig");
+    _ = @import("array.zig");
     _ = @import("type_switcher.zig");
     _ = @import("iterator_functions.zig");
-    _ = @import("ComptimeList.zig");
+    _ = @import("comptime_list.zig");
+    _ = @import("ByteList.zig");
 }

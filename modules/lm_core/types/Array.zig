@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = @import("std").mem.Allocator;
 
-const List = @import("List.zig").List;
+const List = @import("list.zig").List;
 const iterator_functions = @import("iterator_functions.zig");
 
 const coerceTo = @import("type_switcher.zig").coerceTo;
