@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 
 const core = @import("../root.zig");
 
@@ -92,12 +93,15 @@ pub fn set(self: *Self, index: usize, bytes_start: *const anyopaque) void {
     );
 }
 
-pub fn get(self: *Self, index: usize) *anyopaque {
+pub fn get(self: *Self, index: usize) ?*anyopaque {
+    if (builtin.mode == .ReleaseSafe or builtin.mode == .Debug)
+        if (index >= self.len()) return null;
+
     return &self.rawItems()[self.entry_size * index];
 }
 
 pub fn getAs(self: *Self, comptime T: type, index: usize) ?*T {
-    return core.ptrCast(T, self.get(index));
+    return core.ptrCast(T, self.get(index) orelse return null);
 }
 
 pub fn getAsBytes(self: *Self, index: usize) []const u8 {
@@ -107,7 +111,7 @@ pub fn getAsBytes(self: *Self, index: usize) []const u8 {
 pub fn slicedAs(self: *Self, comptime T: type) []T {
     core.assert((comptime te.typeToHash(T)) == self.entry_id, "Type mismatch");
 
-    return @as([*]T, @ptrCast(@alignCast(self.bytes.items().ptr)))[0 .. self.len()];
+    return @as([*]T, @ptrCast(@alignCast(self.bytes.items().ptr)))[0..self.len()];
 }
 
 pub fn pop(self: *Self) ?[]const u8 {

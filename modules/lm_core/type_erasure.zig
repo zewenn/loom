@@ -40,6 +40,10 @@ pub fn u8ArrayToStructPtr(comptime T: type, bytes: []u8) !*T {
     return @ptrCast(@alignCast(bytes.ptr));
 }
 
+pub inline fn alignedSize(comptime T: type) usize {
+    return std.mem.alignForward(usize, @sizeOf(T), @alignOf(T));
+}
+
 pub inline fn typeToHash(comptime T: type) u64 {
     const struct_hash: comptime_int = comptime switch (@typeInfo(T)) {
         .@"struct", .@"enum" => blk: {
