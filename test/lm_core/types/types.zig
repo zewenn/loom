@@ -6,5 +6,6 @@ test {
     _ = @import("comptime_list.zig");
     _ = @import("ByteList.zig");
     _ = @import("paged_list.zig");
-    _ = @import("SparseSet.zig");
+    _ = @import("ByteSparseSet.zig");
+    _ = @import("sparse_set.zig");
 }
