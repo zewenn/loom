@@ -28,16 +28,8 @@ test "initialize the ByteList correctly" {
 
 test "create from slice" {
     var my_byte_list: ByteList = try .initWithItems(MyTestType, testing.allocator, &.{
-        MyTestType{
-            .a = 0,
-            .b = 1,
-            .c = 2,
-        },
-        MyTestType{
-            .a = 1,
-            .b = 2,
-            .c = 3,
-        },
+        MyTestType{ .a = 0, .b = 1, .c = 2 },
+        MyTestType{ .a = 1, .b = 2, .c = 3 },
     });
     defer my_byte_list.deinit();
 

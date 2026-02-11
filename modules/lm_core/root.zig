@@ -7,6 +7,7 @@ pub const Array = types.Array;
 pub const List = types.List;
 pub const ComptimeList = types.ComptimeList;
 pub const ByteList = types.ByteList;
+pub const PagedList = types.PagedList;
 pub const coerceTo = types.coerceTo;
 pub const iterator_functions = types.iterator_functions;
 

@@ -5,4 +5,5 @@ test {
     _ = @import("iterator_functions.zig");
     _ = @import("comptime_list.zig");
     _ = @import("ByteList.zig");
+    _ = @import("paged_list.zig");
 }

@@ -107,7 +107,7 @@ pub fn getAsBytes(self: *Self, index: usize) []const u8 {
 pub fn slicedAs(self: *Self, comptime T: type) []T {
     core.assert((comptime te.typeToHash(T)) == self.entry_id, "Type mismatch");
 
-    return @as([*]T, @ptrCast(@alignCast(self.bytes.items().ptr)))[0 .. self.bytes.items().len / self.entry_size];
+    return @as([*]T, @ptrCast(@alignCast(self.bytes.items().ptr)))[0 .. self.len()];
 }
 
 pub fn pop(self: *Self) ?[]const u8 {
