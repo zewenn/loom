@@ -198,6 +198,13 @@ pub fn List(comptime T: type) type {
             return try .fromArrayList(self.allocator, self.arrlist);
         }
 
+        pub fn toArray(self: *Self) !Array(T) {
+            return Array(T){
+                .alloc = self.allocator,
+                .slice = try self.toOwnedSlice(),
+            };
+        }
+
         pub fn contains(self: *Self, value: T) bool {
             for (self.items()) |item| {
                 if (std.meta.eql(value, item)) return true;

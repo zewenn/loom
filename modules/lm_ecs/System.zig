@@ -10,19 +10,23 @@ const Fn = std.builtin.Type.Fn;
 const StructField = std.builtin.Type.StructField;
 const Param = Fn.Param;
 
+id: u64,
+name: []const u8,
 callback: *const fn ([]const *anyopaque) anyerror!void,
 hashes: []const u64,
 
 pub fn init(comptime func: anytype) Self {
     return Self{
+        .id = comptime core.type_erasure.typeToHash(@TypeOf(func)),
+        .name = @typeName(@TypeOf(func)),
         .callback = comptime wrapFunction(func),
         .hashes = comptime getHashes(func),
     };
 }
 
-pub fn invoke(self: *Self, ptrs: []const *anyopaque) void {
+pub fn invoke(self: Self, ptrs: []const *anyopaque) void {
     self.callback(ptrs) catch |err| {
-        std.log.err("system invoke error: {any}", .{err});
+        std.log.err("system invoke error: {any} @ {s}", .{ err, self.name });
     };
 }
 

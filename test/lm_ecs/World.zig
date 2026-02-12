@@ -13,8 +13,12 @@ const MyOtherComponent = struct {
     inner: u8 = 0,
 };
 
-fn mySystem(component: *MyComponent) !void {
+fn myInitSystem(component: *MyComponent) !void {
     component.inner = 42;
+}
+
+fn myLoadSystem(component: *MyComponent) !void {
+    component.inner = 73;
 }
 
 test "init / deinit" {
@@ -33,6 +37,37 @@ test "newEntity" {
     try std.testing.expectEqual(1, entity1);
 }
 
+test "makeEntity" {
+    var world: World = .init(std.testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.makeEntity(.{
+        MyComponent{ .inner = 67 },
+    });
+
+    const result = world.getComponent(MyComponent, entity).?;
+    try std.testing.expectEqual(67, result.inner);
+}
+
+test "removeEntity" {
+    var world: World = .init(std.testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.makeEntity(.{
+        MyComponent{ .inner = 67 },
+    });
+
+    const result = world.getComponent(MyComponent, entity).?.*;
+    try std.testing.expect(world.isEntityAlive(entity));
+    try std.testing.expectEqual(67, result.inner);
+
+    try world.removeEntity(entity);
+    world.runCleanup();
+
+    try std.testing.expectEqual(null, world.getComponent(MyComponent, entity));
+    try std.testing.expect(!world.isEntityAlive(entity));
+}
+
 test "addComponent / getComponent" {
     var world: World = .init(std.testing.allocator);
     defer world.deinit();
@@ -44,7 +79,7 @@ test "addComponent / getComponent" {
     try std.testing.expectEqual(67, result.inner);
 }
 
-test "addSystem / runSystem" {
+test "removeComponent" {
     var world: World = .init(std.testing.allocator);
     defer world.deinit();
 
@@ -52,13 +87,34 @@ test "addSystem / runSystem" {
     try world.addComponent(entity, MyComponent{ .inner = 67 });
 
     const result = world.getComponent(MyComponent, entity).?;
+    try std.testing.expectEqual(67, result.inner);
+
+    try world.removeComponent(entity, MyComponent);
+    world.runCleanup();
+
+    try std.testing.expectEqual(null, world.getComponent(MyComponent, entity));
+}
+
+test "addSystem / runSystem" {
+    var world: World = .init(std.testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.newEntity();
+    try world.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.addSystem(.init, myInitSystem);
+    try world.addSystem(.load, myLoadSystem);
+
+    const result = world.getComponent(MyComponent, entity).?;
 
     try std.testing.expectEqual(67, result.inner);
 
-    try world.addSystem(mySystem);
-    try world.runSystems();
+    try world.runStage(.init);
 
     try std.testing.expectEqual(42, result.inner);
+
+    try world.runStage(.load);
+
+    try std.testing.expectEqual(73, result.inner);
 }
 
 test "addSystem / runSystem without valid component" {
@@ -67,8 +123,8 @@ test "addSystem / runSystem without valid component" {
 
     _ = try world.newEntity();
 
-    try world.addSystem(mySystem);
-    try world.runSystems();
+    try world.addSystem(.init, myInitSystem);
+    try world.runStage(.init);
 }
 
 test "addSystem / runSystem with other type of component" {
@@ -82,8 +138,33 @@ test "addSystem / runSystem with other type of component" {
 
     try std.testing.expectEqual(67, result.inner);
 
-    try world.addSystem(mySystem);
-    try world.runSystems();
+    try world.addSystem(.init, myInitSystem);
+    try world.runStage(.init);
+
+    try std.testing.expectEqual(67, result.inner);
+}
+
+test "removeSystem" {
+    var world: World = .init(std.testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.newEntity();
+    try world.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.addSystem(.init, myInitSystem);
+
+    const result = world.getComponent(MyComponent, entity).?;
+
+    try std.testing.expectEqual(67, result.inner);
+
+    try world.runStage(.init);
+
+    try std.testing.expectEqual(42, result.inner);
+    result.inner = 67;
+
+    try world.removeSystem(.init, myInitSystem);
+    world.runCleanup();
+
+    try world.runStage(.init);
 
     try std.testing.expectEqual(67, result.inner);
 }

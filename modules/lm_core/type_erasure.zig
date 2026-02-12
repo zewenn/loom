@@ -62,6 +62,11 @@ pub inline fn typeToHash(comptime T: type) u64 {
         else => 1,
     };
 
+    const size: comptime_int = comptime switch (@typeInfo(T)) {
+        .@"fn" => 1,
+        else => @sizeOf(T),
+    };
+
     var name_hash: comptime_int = 0;
 
     inline for (@typeName(T)) |char| {
@@ -69,7 +74,7 @@ pub inline fn typeToHash(comptime T: type) u64 {
             (@as(comptime_int, @intCast(@alignOf(T))) + 1);
     }
 
-    return (@max(1, @sizeOf(T)) * @max(1, @alignOf(T)) +
-        @max(1, @bitSizeOf(T)) * @max(1, @alignOf(T)) +
+    return (@max(1, size) * @max(1, @alignOf(T)) +
+        @max(1, size * 8) * @max(1, @alignOf(T)) +
         struct_hash * name_hash * @max(1, @alignOf(T)) * 13) % std.math.maxInt(u63);
 }
