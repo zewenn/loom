@@ -39,3 +39,24 @@ test "remove" {
     try std.testing.expectEqual(@as(u64, 10), sparse_set.getAs(0, u64).?.*);
     try std.testing.expectEqual(@as(u64, 42), sparse_set.getAs(6668, u64).?.*);
 }
+
+test "contains" {
+    var sparse_set = SparseSet.init(std.testing.allocator, u64);
+    defer sparse_set.deinit();
+
+    try sparse_set.set(1024, @as(u64, 67));
+
+    try std.testing.expect(sparse_set.contains(1024));
+    try std.testing.expect(!sparse_set.contains(6668));
+}
+
+test "len" {
+    var sparse_set = SparseSet.init(std.testing.allocator, u64);
+    defer sparse_set.deinit();
+
+    try std.testing.expectEqual(0, sparse_set.len());
+
+    try sparse_set.set(1024, @as(u64, 67));
+
+    try std.testing.expectEqual(1, sparse_set.len());
+}

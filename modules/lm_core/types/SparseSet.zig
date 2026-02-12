@@ -44,11 +44,16 @@ inline fn assertType(self: *Self, comptime T: type) void {
     core.assert(self.entry_size == te.alignedSize(T), "type size mismatch");
 }
 
+pub inline fn len(self: *Self) usize {
+    return self.backlink.len();
+}
+
 pub fn set(self: *Self, at: usize, value: anytype) !void {
     const T = @TypeOf(value);
     self.assertType(T);
 
     const dense_index = self.dense.len();
+
     try self.dense.append(value);
     try self.backlink.append(at);
     try self.sparse.set(at, dense_index);
@@ -62,6 +67,10 @@ pub fn get(self: *Self, at: usize) ?*anyopaque {
 pub fn getAs(self: *Self, at: usize, comptime T: type) ?*T {
     const dense_index = self.sparse.get(at) orelse return null;
     return self.dense.getAs(T, dense_index);
+}
+
+pub inline fn contains(self: *Self, at: usize) bool {
+    return self.sparse.get(at) != null;
 }
 
 pub fn remove(self: *Self, at: usize) !void {

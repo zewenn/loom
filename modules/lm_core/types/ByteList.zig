@@ -86,6 +86,10 @@ pub fn appendSlice(self: *Self, comptime T: type, slice: []const T) !void {
     }
 }
 
+pub fn appendBytes(self: *Self, bytes_start: *const anyopaque) !void {
+    try self.bytes.appendSlice(@as([*]const u8, @ptrCast(bytes_start))[0..self.entry_size]);
+}
+
 pub fn set(self: *Self, index: usize, bytes_start: *const anyopaque) void {
     @memcpy(
         self.bytes.items()[index * self.entry_size ..][0..self.entry_size],
