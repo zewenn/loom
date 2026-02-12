@@ -59,6 +59,10 @@ pub fn SparseSet(comptime DENSE_T: type) type {
             return &self.dense.items()[dense_index];
         }
 
+        pub fn contains(self: *Self, at: usize) bool {
+            return self.get(at) != null;
+        }
+
         pub fn remove(self: *Self, at: usize) void {
             const index = self.sparse.get(at) orelse return;
             const sparse_index = self.backlink.getLast();

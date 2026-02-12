@@ -1,3 +1,4 @@
+const std = @import("std");
 const lm_core = @import("lm_core");
 
 test {

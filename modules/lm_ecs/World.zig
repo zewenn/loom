@@ -3,23 +3,29 @@ const Allocator = std.mem.Allocator;
 
 const core = @import("lm_core");
 
-const ComponentStore = @import("ComponentStore.zig");
-const PendingComponent = @import("PendingComponent.zig");
-
 const Self = @This();
 
-stores: core.List(ComponentStore),
-pending: core.List(PendingComponent),
+const Entity = usize;
 
 free_list: core.List(usize),
-next_entity_index: usize,
+next_entity_index: usize = 0,
+
+groups: std.AutoHashMap(u128, core.types.SparseSet(Entity)),
+type_bit_index_map: std.AutoHashMap(u64, usize),
+next_component_bit_index: usize = 0,
+
+stores: std.AutoHashMap(u64, core.types.ByteSparseSet),
 
 allocator: Allocator,
 
 pub fn init(allocator: Allocator) Self {
     return Self{
         .allocator = allocator,
-        .pending = .init(allocator),
+
+        .groups = .init(allocator),
+        .type_bit_index_map = .init(allocator),
+        .next_component_bit_index = 0,
+
         .stores = .init(allocator),
 
         .free_list = .init(allocator),
@@ -28,81 +34,135 @@ pub fn init(allocator: Allocator) Self {
 }
 
 pub fn deinit(self: *Self) void {
-    self.reset();
-
-    self.pending.deinit();
+    const stores_iterator = self.stores.valueIterator();
+    while (stores_iterator.next()) |set| {
+        set.deinit();
+    }
     self.stores.deinit();
+
+    const groups_iterator = self.groups.valueIterator();
+    while (groups_iterator.next()) |group| {
+        group.deinit();
+    }
+    self.groups.deinit();
+
+    self.type_bit_index_map.deinit();
+    self.free_list.deinit();
 
     self.* = undefined;
 }
 
-pub fn reset(self: *Self) void {
-    const stores_len = self.stores.len();
-    for (1..stores_len + 1) |j| {
-        const index = stores_len - j;
-        const element = &self.stores.items()[index];
-
-        element.deinit();
-        _ = self.stores.swapRemove(index);
-    }
-
-    const pending_len = self.pending.len();
-    for (1..pending_len + 1) |j| {
-        const index = pending_len - j;
-        const element = &self.pending.items()[index];
-
-        element.deinit();
-        _ = self.pending.swapRemove(index);
-    }
-
-    core.assert(self.stores.len() == 0, "stores wasn't cleared");
-    core.assert(self.pending.len() == 0, "pending wasn't cleared");
+pub inline fn getComponentStore(self: *Self, comptime T: type) ?*core.types.ByteSparseSet {
+    return self.stores.getPtr(comptime core.type_erasure.typeToHash(T));
 }
 
-fn getEntityId(self: *Self) usize {
-    if (self.free_list.pop()) |value| return value;
+pub fn getComponentStores(self: *Self, comptime types: []const type) ?core.Array(*core.types.ByteSparseSet) {
+    var list = core.List(*core.types.ByteSparseSet).init(self.allocator);
+    defer list.deinit();
 
-    const value = self.next_entity_index;
-    self.next_entity_index += 1;
+    inline for (types) |T| {
+        try list.append(self.getComponentStore(T) orelse return null);
+    }
 
-    return value;
+    return list.cloneToArray();
 }
 
-pub fn addEntity(self: *Self, components: anytype) !void {
-    const id = self.getEntityId();
+pub fn getComponentStoresByHash(self: *Self, comptime hashes: []const u64) ?core.Array(*core.types.ByteSparseSet) {
+    var list = core.List(*core.types.ByteSparseSet).init(self.allocator);
+    defer list.deinit();
 
-    switch (@typeInfo(@TypeOf(components))) {
-        .@"struct" => |val| {
-            core.comptimeAssert(val.is_tuple, "param \"components\" must be a tuple");
-        },
+    inline for (hashes) |hash| {
+        try list.append(self.stores.getPtr(hash) orelse return null);
     }
 
-    for (components) |component| {
-        const pending: PendingComponent = try .init(self.allocator, id, component);
-        try self.pending.append(pending);
-    }
+    return list.cloneToArray();
 }
 
-fn addPendingComponent(self: *Self, pending: PendingComponent) !void {
-    for (self.stores.items()) |store| {
-        if (store.component_id != pending.id) continue;
-
-        try store.storePending(pending);
-        return;
-    }
-
-    try self.stores.append(try .fromPending(self.allocator, pending));
+inline fn assertValidEntityId(self: *Self, id: Entity) void {
+    core.assertFmt(id < self.next_entity_index, "{d} was outside of created entities", .{id});
+    core.assertFmt(self.free_list.contains(id), "{d} belongs to a dead entity", .{id});
 }
 
-fn addPendingComponents(self: *Self) !void {
-    const len = self.pending.len();
-    for (1..len + 1) |j| {
-        const index = len - j;
-        const elem = &self.pending.items()[index];
+fn getMaskForEntity(self: *Self, entity: Entity) u128 {
+    var mask: u128 = 0;
+    var iter = self.groups.iterator();
+    while (iter.next()) |entry| {
+        if (!entry.value_ptr.*.contains(entity)) continue;
 
-        try self.addPendingComponent(elem.*);
-        elem.deinit();
-        _ = self.pending.swapRemove(index);
+        entry.value_ptr.*.remove(entity);
+        mask = entry.key_ptr.*;
     }
-    self.pending.clearAndFree();
+
+    return mask;
+}
+
+pub fn newEntity(self: *Self) !void {
+    const new_id = self.free_list.pop() orelse get: {
+        defer self.next_entity_index += 1;
+        break :get self.next_entity_index;
+    };
+
+    if (!self.groups.contains(0))
+        try self.groups.put(0, .init(self.allocator));
+
+    const ptr = self.groups.getPtr(0).?;
+    try ptr.set(new_id, new_id);
+}
+
+pub fn addComponent(self: *Self, entity: Entity, component: anytype) !void {
+    self.assertValidEntityId(entity);
+
+    const T = @TypeOf(component);
+    const hash = comptime core.type_erasure.typeToHash(T);
+
+    if (!self.type_bit_index_map.contains(hash)) {
+        try self.type_bit_index_map.put(hash, self.next_component_bit_index);
+        self.next_component_bit_index += 1;
+    }
+
+    const current_mask: u128 = self.getMaskForEntity(entity);
+    const bit_index = self.type_bit_index_map.get(hash).?;
+    const base_mask: u128 = 0b1;
+    const shifted = base_mask << bit_index;
+    const new_bitmask = current_mask | shifted;
+
+    if (!self.groups.contains(new_bitmask))
+        self.groups.put(new_bitmask, .init(self.allocator));
+
+    const ptr = self.groups.getPtr(new_bitmask).?;
+    try ptr.set(entity, entity);
+
+    if (!self.stores.contains(hash))
+        try self.stores.put(hash, .init(self.allocator, T));
+
+    const store = self.stores.getPtr(hash).?;
+    try store.set(entity, component);
+}
+
+pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
+    self.assertValidEntityId(entity);
+
+    const store = self.getComponentStore(T) orelse return null;
+    return store.getAs(entity, T);
+}
+
+pub fn getConstComponent(self: *Self, comptime T: type, entity: Entity) ?*const T {
+    self.assertValidEntityId(entity);
+
+    const store = self.getComponentStore(T) orelse return null;
+    const ptr = store.getAs(entity, T) orelse return null;
+    return ptr;
+}
+
+pub fn generateComponentMask(self: *Self, hashes: []const u64) ?u128 {
+    var current_bitmask: u128 = 0b0;
+
+    for (hashes) |hash| {
+        const bit_index = self.type_bit_index_map.get(hash) orelse return null;
+        const base_mask: u128 = 0b1;
+        const shifted = base_mask << bit_index;
+        current_bitmask = current_bitmask | shifted;
+    }
+
+    return current_bitmask;
 }

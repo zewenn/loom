@@ -194,8 +194,15 @@ pub fn List(comptime T: type) type {
             return try cloned.toOwnedSlice();
         }
 
-        pub fn toArray(self: *Self) !Array(T) {
+        pub fn cloneToArray(self: *Self) !Array(T) {
             return try .fromArrayList(self.allocator, self.arrlist);
+        }
+
+        pub fn contains(self: *Self, value: T) bool {
+            for (self.items()) |item| {
+                if (std.meta.eql(value, item)) return true;
+            }
+            return false;
         }
 
         pub fn map(self: Self, R: type, mapping_function: iterator_functions.MappingFn(T, R)) !List(R) {

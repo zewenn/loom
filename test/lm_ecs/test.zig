@@ -1,3 +1,3 @@
 test {
-    _ = @import("ComponentStore.zig");
+    _ = @import("System.zig");
 }

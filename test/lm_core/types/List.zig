@@ -278,7 +278,7 @@ test "toArray" {
 
     try expect(test_list.len() == 5);
 
-    var array = try test_list.toArray();
+    var array = try test_list.cloneToArray();
     defer array.deinit();
 
     try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 5 }, array.slice);
@@ -361,4 +361,11 @@ test "forEach" {
 
     try std.testing.expectError(error.MyError, test_list.forEach(s.errorForeach));
     try std.testing.expectEqual(@as(usize, 15), s.counter);
+}
+
+test "contains" {
+    var test_list = try List(u8).initWithItems(std.testing.allocator, &.{ 1, 2, 3, 4, 5 });
+    defer test_list.deinit();
+
+    try expect(test_list.contains(3));
 }

@@ -1,5 +1,4 @@
-pub const ComponentStore = @import("ComponentStore.zig");
-pub const PendingComponent = @import("PendingComponent.zig");
+pub const System = @import("System.zig");
 
 // Plan:
 // const MyComponent = struct { ... };
