@@ -2,17 +2,19 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const core = @import("lm_core");
+const System = @import("System.zig");
 
 const Self = @This();
 
 const Entity = usize;
 
 free_list: core.List(usize),
+systems: core.List(System),
 next_entity_index: usize = 0,
 
 groups: std.AutoHashMap(u128, core.types.SparseSet(Entity)),
-type_bit_index_map: std.AutoHashMap(u64, usize),
-next_component_bit_index: usize = 0,
+type_bit_index_map: std.AutoHashMap(u64, u7),
+next_component_bit_index: u7 = 0,
 
 stores: std.AutoHashMap(u64, core.types.ByteSparseSet),
 
@@ -27,6 +29,7 @@ pub fn init(allocator: Allocator) Self {
         .next_component_bit_index = 0,
 
         .stores = .init(allocator),
+        .systems = .init(allocator),
 
         .free_list = .init(allocator),
         .next_entity_index = 0,
@@ -34,13 +37,13 @@ pub fn init(allocator: Allocator) Self {
 }
 
 pub fn deinit(self: *Self) void {
-    const stores_iterator = self.stores.valueIterator();
+    var stores_iterator = self.stores.valueIterator();
     while (stores_iterator.next()) |set| {
         set.deinit();
     }
     self.stores.deinit();
 
-    const groups_iterator = self.groups.valueIterator();
+    var groups_iterator = self.groups.valueIterator();
     while (groups_iterator.next()) |group| {
         group.deinit();
     }
@@ -48,15 +51,16 @@ pub fn deinit(self: *Self) void {
 
     self.type_bit_index_map.deinit();
     self.free_list.deinit();
+    self.systems.deinit();
 
     self.* = undefined;
 }
 
-pub inline fn getComponentStore(self: *Self, comptime T: type) ?*core.types.ByteSparseSet {
+inline fn getComponentStore(self: *Self, comptime T: type) ?*core.types.ByteSparseSet {
     return self.stores.getPtr(comptime core.type_erasure.typeToHash(T));
 }
 
-pub fn getComponentStores(self: *Self, comptime types: []const type) ?core.Array(*core.types.ByteSparseSet) {
+fn getComponentStores(self: *Self, comptime types: []const type) !?core.Array(*core.types.ByteSparseSet) {
     var list = core.List(*core.types.ByteSparseSet).init(self.allocator);
     defer list.deinit();
 
@@ -64,23 +68,26 @@ pub fn getComponentStores(self: *Self, comptime types: []const type) ?core.Array
         try list.append(self.getComponentStore(T) orelse return null);
     }
 
-    return list.cloneToArray();
+    return try list.cloneToArray();
 }
 
-pub fn getComponentStoresByHash(self: *Self, comptime hashes: []const u64) ?core.Array(*core.types.ByteSparseSet) {
+fn getComponentStoresByHash(self: *Self, hashes: []const u64) !?core.Array(*core.types.ByteSparseSet) {
     var list = core.List(*core.types.ByteSparseSet).init(self.allocator);
     defer list.deinit();
 
-    inline for (hashes) |hash| {
+    for (hashes) |hash| {
         try list.append(self.stores.getPtr(hash) orelse return null);
     }
 
-    return list.cloneToArray();
+    return try list.cloneToArray();
 }
 
 inline fn assertValidEntityId(self: *Self, id: Entity) void {
-    core.assertFmt(id < self.next_entity_index, "{d} was outside of created entities", .{id});
-    core.assertFmt(self.free_list.contains(id), "{d} belongs to a dead entity", .{id});
+    core.assertFmt(
+        id < self.next_entity_index or self.free_list.contains(id),
+        "{d} was outside of created entities",
+        .{id},
+    );
 }
 
 fn getMaskForEntity(self: *Self, entity: Entity) u128 {
@@ -96,7 +103,25 @@ fn getMaskForEntity(self: *Self, entity: Entity) u128 {
     return mask;
 }
 
-pub fn newEntity(self: *Self) !void {
+fn getEntitiesForMask(self: *Self, mask: u128) !core.Array(Entity) {
+    const ptr = self.groups.getPtr(mask) orelse return try .init(self.allocator, &.{});
+    return try .init(self.allocator, ptr.backlink.items());
+}
+
+pub fn generateComponentMask(self: *Self, hashes: []const u64) ?u128 {
+    var current_bitmask: u128 = 0b0;
+
+    for (hashes) |hash| {
+        const bit_index = self.type_bit_index_map.get(hash) orelse return null;
+        const base_mask: u128 = 0b1;
+        const shifted = base_mask << bit_index;
+        current_bitmask = current_bitmask | shifted;
+    }
+
+    return current_bitmask;
+}
+
+pub fn newEntity(self: *Self) !Entity {
     const new_id = self.free_list.pop() orelse get: {
         defer self.next_entity_index += 1;
         break :get self.next_entity_index;
@@ -107,6 +132,8 @@ pub fn newEntity(self: *Self) !void {
 
     const ptr = self.groups.getPtr(0).?;
     try ptr.set(new_id, new_id);
+
+    return new_id;
 }
 
 pub fn addComponent(self: *Self, entity: Entity, component: anytype) !void {
@@ -127,7 +154,7 @@ pub fn addComponent(self: *Self, entity: Entity, component: anytype) !void {
     const new_bitmask = current_mask | shifted;
 
     if (!self.groups.contains(new_bitmask))
-        self.groups.put(new_bitmask, .init(self.allocator));
+        try self.groups.put(new_bitmask, .init(self.allocator));
 
     const ptr = self.groups.getPtr(new_bitmask).?;
     try ptr.set(entity, entity);
@@ -154,15 +181,29 @@ pub fn getConstComponent(self: *Self, comptime T: type, entity: Entity) ?*const 
     return ptr;
 }
 
-pub fn generateComponentMask(self: *Self, hashes: []const u64) ?u128 {
-    var current_bitmask: u128 = 0b0;
+pub fn addSystem(self: *Self, comptime func: anytype) !void {
+    try self.systems.append(.init(func));
+}
 
-    for (hashes) |hash| {
-        const bit_index = self.type_bit_index_map.get(hash) orelse return null;
-        const base_mask: u128 = 0b1;
-        const shifted = base_mask << bit_index;
-        current_bitmask = current_bitmask | shifted;
+pub fn runSystems(self: *Self) !void {
+    outer: for (self.systems.items()) |*system| {
+        const bitmask = self.generateComponentMask(system.hashes) orelse continue;
+        var entities = try self.getEntitiesForMask(bitmask);
+        defer entities.deinit();
+
+        var stores = (try self.getComponentStoresByHash(system.hashes)) orelse continue;
+        defer stores.deinit();
+
+        for (entities.items()) |entity| {
+            var ptrs: core.List(*anyopaque) = .init(self.allocator);
+            defer ptrs.deinit();
+
+            for (stores.items()) |store| {
+                const ptr = store.get(entity) orelse continue :outer;
+                try ptrs.append(ptr);
+            }
+
+            system.invoke(ptrs.items());
+        }
     }
-
-    return current_bitmask;
 }

@@ -20,6 +20,12 @@ pub fn init(comptime func: anytype) Self {
     };
 }
 
+pub fn invoke(self: *Self, ptrs: []const *anyopaque) void {
+    self.callback(ptrs) catch |err| {
+        std.log.err("system invoke error: {any}", .{err});
+    };
+}
+
 inline fn canError(comptime func: anytype) bool {
     return switch (@typeInfo(@TypeOf(func))) {
         .@"fn" => |info| info.return_type == void,

@@ -1,4 +1,5 @@
 pub const System = @import("System.zig");
+pub const World = @import("World.zig");
 
 // Plan:
 // const MyComponent = struct { ... };
