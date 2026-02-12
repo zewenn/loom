@@ -3,7 +3,8 @@ pub const List = @import("list.zig").List;
 pub const ComptimeList = @import("comptime_list.zig").ComptimeList;
 pub const ByteList = @import("ByteList.zig");
 pub const PagedList = @import("paged_list.zig").PagedList;
-pub const SparseSet = @import("SparseSet.zig");
+pub const SparseSet = @import("sparse_set.zig").SparseSet;
+pub const ByteSparseSet = @import("ByteSparseSet.zig");
 
 pub const coerceTo = @import("type_switcher.zig").coerceTo;
 

@@ -73,17 +73,14 @@ pub inline fn contains(self: *Self, at: usize) bool {
     return self.sparse.get(at) != null;
 }
 
-pub fn remove(self: *Self, at: usize) !void {
+pub fn remove(self: *Self, at: usize) void {
     const index = self.sparse.get(at) orelse return;
     const sparse_index = self.backlink.getLast();
 
-    try self.sparse.set(sparse_index, index);
+    self.sparse.set(sparse_index, index) catch unreachable;
 
     _ = self.backlink.swapRemove(index);
     self.dense.swapRemove(index);
 
-    switch (builtin.mode) {
-        .ReleaseFast => self.sparse.remove(at),
-        else => self.sparse.removeFast(at),
-    }
+    self.sparse.remove(at);
 }
