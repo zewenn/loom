@@ -31,6 +31,17 @@ pub fn init(allocator: Allocator, comptime T: type) Self {
     };
 }
 
+pub fn initFromInfo(allocator: Allocator, entry_id: u64, entry_size: usize) Self {
+    return Self{
+        .allocator = allocator,
+        .entry_id = entry_id,
+        .entry_size = entry_size,
+        .dense = .initWithInfo(allocator, entry_id, entry_size),
+        .backlink = .init(allocator),
+        .sparse = .init(allocator),
+    };
+}
+
 pub fn deinit(self: *Self) void {
     self.dense.deinit();
     self.backlink.deinit();
@@ -52,9 +63,36 @@ pub fn set(self: *Self, at: usize, value: anytype) !void {
     const T = @TypeOf(value);
     self.assertType(T);
 
+    if (self.sparse.get(at)) |dense_index| {
+        self.dense.set(dense_index, &value);
+        self.backlink.items()[dense_index] = at;
+
+        try self.sparse.set(at, dense_index);
+        return;
+    }
+
     const dense_index = self.dense.len();
 
     try self.dense.append(value);
+    try self.backlink.append(at);
+    try self.sparse.set(at, dense_index);
+}
+
+pub fn setWithInfo(self: *Self, at: usize, entry_id: u64, entry_size: usize, value: *const anyopaque) !void {
+    core.assert(self.entry_id == entry_id, "type hash mismatch");
+    core.assert(self.entry_size == entry_size, "type size mismatch");
+
+    if (self.sparse.get(at)) |dense_index| {
+        self.dense.set(dense_index, value);
+        self.backlink.items()[dense_index] = at;
+
+        try self.sparse.set(at, dense_index);
+        return;
+    }
+
+    const dense_index = self.dense.len();
+
+    try self.dense.appendBytes(value);
     try self.backlink.append(at);
     try self.sparse.set(at, dense_index);
 }

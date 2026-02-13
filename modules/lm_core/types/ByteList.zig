@@ -28,6 +28,15 @@ pub fn init(allocator: Allocator, comptime T: type) Self {
     };
 }
 
+pub fn initWithInfo(allocator: Allocator, entry_id: u64, entry_size: usize) Self {
+    return Self{
+        .allocator = allocator,
+        .entry_id = entry_id,
+        .entry_size = entry_size,
+        .bytes = .init(allocator),
+    };
+}
+
 pub fn deinit(self: *Self) void {
     self.bytes.deinit();
 

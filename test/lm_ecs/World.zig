@@ -46,32 +46,22 @@ test "newEntity" {
     try std.testing.expectEqual(1, entity1);
 }
 
-test "makeEntity" {
-    var world: World = .init(std.testing.allocator);
-    defer world.deinit();
-
-    const entity = try world.makeEntity(.{
-        MyComponent{ .inner = 67 },
-    });
-
-    const result = world.getComponent(MyComponent, entity).?;
-    try std.testing.expectEqual(67, result.inner);
-}
-
 test "removeEntity" {
     var world: World = .init(std.testing.allocator);
     defer world.deinit();
 
-    const entity = try world.makeEntity(.{
-        MyComponent{ .inner = 67 },
-    });
+    const entity = try world.newEntity();
+    try std.testing.expectEqual(0, entity);
+
+    try world.command_buffer.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.applyCommandBuffer();
 
     const result = world.getComponent(MyComponent, entity).?.*;
     try std.testing.expect(world.isEntityAlive(entity));
     try std.testing.expectEqual(67, result.inner);
 
-    try world.removeEntity(entity);
-    world.runCleanup();
+    try world.command_buffer.removeEntity(entity);
+    try world.applyCommandBuffer();
 
     try std.testing.expectEqual(null, world.getComponent(MyComponent, entity));
     try std.testing.expect(!world.isEntityAlive(entity));
@@ -82,7 +72,8 @@ test "addComponent / getComponent" {
     defer world.deinit();
 
     const entity = try world.newEntity();
-    try world.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.command_buffer.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.applyCommandBuffer();
 
     const result = world.getComponent(MyComponent, entity).?;
     try std.testing.expectEqual(67, result.inner);
@@ -93,13 +84,14 @@ test "removeComponent" {
     defer world.deinit();
 
     const entity = try world.newEntity();
-    try world.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.command_buffer.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.applyCommandBuffer();
 
     const result = world.getComponent(MyComponent, entity).?;
     try std.testing.expectEqual(67, result.inner);
 
-    try world.removeComponent(entity, MyComponent);
-    world.runCleanup();
+    try world.command_buffer.removeComponent(entity, MyComponent);
+    try world.applyCommandBuffer();
 
     try std.testing.expectEqual(null, world.getComponent(MyComponent, entity));
 }
@@ -109,10 +101,14 @@ test "addSystem / runSystem" {
     defer world.deinit();
 
     const entity = try world.newEntity();
-    try world.addComponent(entity, MyComponent{ .inner = 67 });
-    try world.addComponent(entity, MyOtherComponent{ .inner = 67 });
-    try world.addSystem(.init, myInitSystem);
-    try world.addSystem(.load, myLoadSystem);
+
+    try world.command_buffer.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.command_buffer.addComponent(entity, MyOtherComponent{ .inner = 67 });
+
+    try world.command_buffer.addSystem(.init, myInitSystem);
+    try world.command_buffer.addSystem(.load, myLoadSystem);
+
+    try world.applyCommandBuffer();
 
     const result = world.getComponent(MyComponent, entity).?;
 
@@ -133,7 +129,9 @@ test "addSystem / runSystem without valid component" {
 
     _ = try world.newEntity();
 
-    try world.addSystem(.init, myInitSystem);
+    try world.command_buffer.addSystem(.init, myInitSystem);
+    try world.applyCommandBuffer();
+
     try world.runStage(.init);
 }
 
@@ -142,13 +140,15 @@ test "addSystem / runSystem with other type of component" {
     defer world.deinit();
 
     const entity = try world.newEntity();
-    try world.addComponent(entity, MyOtherComponent{ .inner = 67 });
+    try world.command_buffer.addComponent(entity, MyOtherComponent{ .inner = 67 });
+    try world.command_buffer.addSystem(.init, myInitSystem);
+
+    try world.applyCommandBuffer();
 
     const result = world.getComponent(MyOtherComponent, entity).?;
 
     try std.testing.expectEqual(67, result.inner);
 
-    try world.addSystem(.init, myInitSystem);
     try world.runStage(.init);
 
     try std.testing.expectEqual(67, result.inner);
@@ -158,21 +158,24 @@ test "multiple entities in multiple systems" {
     var world: World = .init(std.testing.allocator);
     defer world.deinit();
 
-    const entity0 = try world.makeEntity(.{
+    const entity0 = try world.newEntity();
+    const entity1 = try world.newEntity();
+    const entity2 = try world.newEntity();
+
+    try world.command_buffer.addComponents(entity0, .{
         MyComponent{ .inner = 0 },
         MyOtherComponent{ .inner = 0 },
         MyThirdComponent{ .inner = 0 },
     });
-    const entity1 = try world.makeEntity(.{
-        MyOtherComponent{ .inner = 2 },
-    });
-    const entity2 = try world.makeEntity(.{
-        MyComponent{ .inner = 3 },
-    });
 
-    try world.addSystem(.init, myInitSystem);
-    try world.addSystem(.init, myOtherInitSystem);
-    try world.addSystem(.init, myComboInitSystem);
+    try world.command_buffer.addComponent(entity1, MyOtherComponent{ .inner = 2 });
+    try world.command_buffer.addComponent(entity2, MyComponent{ .inner = 3 });
+
+    try world.command_buffer.addSystem(.init, myInitSystem);
+    try world.command_buffer.addSystem(.init, myOtherInitSystem);
+    try world.command_buffer.addSystem(.init, myComboInitSystem);
+
+    try world.applyCommandBuffer();
 
     const e0_third = world.getComponent(MyThirdComponent, entity0).?;
     const e1_other = world.getComponent(MyOtherComponent, entity1).?;
@@ -195,8 +198,10 @@ test "removeSystem" {
     defer world.deinit();
 
     const entity = try world.newEntity();
-    try world.addComponent(entity, MyComponent{ .inner = 67 });
-    try world.addSystem(.init, myInitSystem);
+    try world.command_buffer.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.command_buffer.addSystem(.init, myInitSystem);
+
+    try world.applyCommandBuffer();
 
     const result = world.getComponent(MyComponent, entity).?;
 
@@ -207,8 +212,8 @@ test "removeSystem" {
     try std.testing.expectEqual(5, result.inner);
     result.inner = 67;
 
-    try world.removeSystem(.init, myInitSystem);
-    world.runCleanup();
+    try world.command_buffer.removeSystem(.init, myInitSystem);
+    try world.applyCommandBuffer();
 
     try world.runStage(.init);
 

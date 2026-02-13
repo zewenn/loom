@@ -7,6 +7,7 @@ const ecs = @import("root.zig");
 const System = ecs.System;
 const Stage = ecs.Stage;
 const Entity = ecs.Entity;
+const CommandBuffer = ecs.CommandBuffer;
 
 const Self = @This();
 
@@ -17,7 +18,6 @@ available_entity_ids: core.List(usize),
 next_entity_index: usize = 0,
 
 masks: core.types.SparseSet(u128),
-// type_bit_index_map: std.AutoHashMap(u64, u7),
 type_bit_index_set: core.types.SparseSet(u64),
 next_component_bit_index: u7 = 0,
 
@@ -26,6 +26,8 @@ stores: std.AutoHashMap(u64, core.types.ByteSparseSet),
 thread_pool: ?std.Thread.Pool,
 run_stage_scratch_memory: core.List(*anyopaque),
 cleanup_scratch_memory: core.List(*anyopaque),
+
+command_buffer: CommandBuffer,
 
 allocator: Allocator,
 
@@ -46,6 +48,8 @@ pub fn init(allocator: Allocator) Self {
         .thread_pool = null,
         .run_stage_scratch_memory = .init(allocator),
         .cleanup_scratch_memory = .init(allocator),
+
+        .command_buffer = .init(allocator),
 
         .cleanup_marks = .init(allocator),
     };
@@ -72,35 +76,16 @@ pub fn deinit(self: *Self) void {
     self.run_stage_scratch_memory.deinit();
     self.cleanup_scratch_memory.deinit();
 
+    self.command_buffer.deinit();
+
     self.* = undefined;
 }
 
 // Utils
 // --------------------------------------------------------------------------------------------------------
+
 inline fn getComponentStore(self: *Self, comptime T: type) ?*core.types.ByteSparseSet {
     return self.stores.getPtr(comptime core.type_erasure.typeToHash(T));
-}
-
-fn getComponentStores(self: *Self, comptime types: []const type) !?core.Array(*core.types.ByteSparseSet) {
-    var list = core.List(*core.types.ByteSparseSet).init(self.allocator);
-    defer list.deinit();
-
-    inline for (types) |T| {
-        try list.append(self.getComponentStore(T) orelse return null);
-    }
-
-    return try list.toArray();
-}
-
-fn getComponentStoresByHash(self: *Self, hashes: []const u64) !?core.Array(*core.types.ByteSparseSet) {
-    var list = core.List(*core.types.ByteSparseSet).init(self.allocator);
-    defer list.deinit();
-
-    for (hashes) |hash| {
-        try list.append(self.stores.getPtr(hash) orelse return null);
-    }
-
-    return try list.toArray();
 }
 
 fn getComponentStoresByBits(self: *Self, bits: u128, buffer: *core.List(*anyopaque)) !void {
@@ -133,7 +118,7 @@ inline fn assertValidEntityId(self: *Self, id: Entity) void {
     );
 }
 
-pub fn generateComponentMask(self: *Self, hashes: []const u64) ?u128 {
+fn generateComponentMask(self: *Self, hashes: []const u64) ?u128 {
     var current_bitmask: u128 = 0b0;
 
     for (hashes) |hash| {
@@ -161,37 +146,22 @@ pub fn newEntity(self: *Self) !Entity {
     return new_id;
 }
 
-pub fn makeEntity(self: *Self, components: anytype) !Entity {
-    core.comptimeAssert(core.types.isTuple(components), "components must be in a tuple");
-
-    const handle = try self.newEntity();
-
-    inline for (components) |component| {
-        try self.addComponent(handle, component);
-    }
-
-    return handle;
-}
-
-pub fn removeEntity(self: *Self, entity: Entity) !void {
+fn removeEntity(self: *Self, entity: Entity) !void {
     try self.cleanup_marks.entities.append(entity);
 }
 
 // Components
 // --------------------------------------------------------------------------------------------------------
 
-pub fn addComponent(self: *Self, entity: Entity, component: anytype) !void {
+fn addComponent(self: *Self, entity: Entity, entry_id: u64, entry_size: usize, entry: *const anyopaque) !void {
     self.assertValidEntityId(entity);
 
-    const T = @TypeOf(component);
-    const hash = comptime core.type_erasure.typeToHash(T);
-
-    if (!self.type_bit_index_set.containsValue(hash)) {
-        try self.type_bit_index_set.set(self.next_component_bit_index, hash);
+    if (!self.type_bit_index_set.containsValue(entry_id)) {
+        try self.type_bit_index_set.set(self.next_component_bit_index, entry_id);
         self.next_component_bit_index += 1;
     }
 
-    const bit_index = self.type_bit_index_set.getKeyByValue(hash).?;
+    const bit_index = self.type_bit_index_set.getKeyByValue(entry_id).?;
     const shift = core.coerceTo(u7, bit_index).?;
 
     const component_bit = @as(u128, 1) << shift;
@@ -200,11 +170,11 @@ pub fn addComponent(self: *Self, entity: Entity, component: anytype) !void {
     const new_mask = old_mask | component_bit;
     try self.masks.set(entity, new_mask);
 
-    if (!self.stores.contains(hash))
-        try self.stores.put(hash, .init(self.allocator, T));
+    if (!self.stores.contains(entry_id))
+        try self.stores.put(entry_id, .initFromInfo(self.allocator, entry_id, entry_size));
 
-    const store = self.stores.getPtr(hash).?;
-    try store.set(entity, component);
+    const store = self.stores.getPtr(entry_id).?;
+    try store.setWithInfo(entity, entry_id, entry_size, entry);
 }
 
 pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
@@ -222,19 +192,19 @@ pub fn getConstComponent(self: *Self, comptime T: type, entity: Entity) ?*const 
     return ptr;
 }
 
-pub fn removeComponent(self: *Self, entity: Entity, comptime T: type) !void {
-    try self.cleanup_marks.components.set(entity, comptime core.type_erasure.typeToHash(T));
+fn removeComponent(self: *Self, entity: Entity, hash: u64) !void {
+    try self.cleanup_marks.components.set(entity, hash);
 }
 
 // Systems
 // --------------------------------------------------------------------------------------------------------
 
-pub fn addSystem(self: *Self, stage: Stage, comptime func: anytype) !void {
+fn addSystem(self: *Self, stage: Stage, system: System) !void {
     if (!self.systems.contains(stage))
         try self.systems.put(stage, .init(self.allocator));
 
     const ptr = self.systems.getPtr(stage).?;
-    try ptr.append(.init(func));
+    try ptr.append(system);
 }
 
 pub fn runStage(self: *Self, stage: Stage) !void {
@@ -300,6 +270,7 @@ pub fn runStage(self: *Self, stage: Stage) !void {
     }
 
     wg.wait();
+    try self.applyCommandBuffer();
 }
 
 fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque) void {
@@ -336,16 +307,35 @@ fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque) void
     }
 }
 
-pub fn removeSystem(self: *Self, stage: Stage, comptime system: anytype) !void {
-    const id = System.init(system).id;
-    try self.cleanup_marks.systems.append(.init(stage, id));
+fn removeSystem(self: *Self, stage: Stage, system: System) !void {
+    try self.cleanup_marks.systems.append(.init(stage, system.id));
 }
 
 // Cleanup
 // --------------------------------------------------------------------------------------------------------
 
-pub fn runCleanup(self: *Self) void {
-    defer self.cleanup_marks.reset();
+pub fn applyCommandBuffer(self: *Self) !void {
+    for (self.command_buffer.commands.items()) |cmd| switch (cmd) {
+        .add_component => |info| {
+            const start = info.data_offset;
+            const end = info.data_offset + info.data_size;
+            try self.addComponent(info.entity, info.type_hash, info.data_size, self.command_buffer.data.items()[start..end].ptr);
+        },
+        .add_system => |info| try self.addSystem(info.stage, info.system),
+
+        .remove_entity => |entity| try self.removeEntity(entity),
+        .remove_component => |data| try self.removeComponent(data.entity, data.type_hash),
+        .remove_system => |info| try self.removeSystem(info.stage, info.system),
+    };
+
+    self.runCleanup();
+}
+
+fn runCleanup(self: *Self) void {
+    defer {
+        self.command_buffer.reset();
+        self.cleanup_marks.reset();
+    }
 
     for (self.cleanup_marks.entities.items()) |entity| {
         if (!self.isEntityAlive(entity)) continue;
