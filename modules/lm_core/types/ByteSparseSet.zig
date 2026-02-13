@@ -75,12 +75,13 @@ pub inline fn contains(self: *Self, at: usize) bool {
 
 pub fn remove(self: *Self, at: usize) void {
     const index = self.sparse.get(at) orelse return;
-    const sparse_index = self.backlink.getLast();
-
-    self.sparse.set(sparse_index, index) catch unreachable;
+    defer self.sparse.remove(at);
 
     _ = self.backlink.swapRemove(index);
     self.dense.swapRemove(index);
 
-    self.sparse.remove(at);
+    if (self.backlink.len() == 0) return;
+
+    const sparse_index = self.backlink.getLast();
+    self.sparse.set(sparse_index, index) catch unreachable;
 }

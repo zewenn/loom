@@ -16,6 +16,13 @@ const MyOtherComponent = struct {
 fn myInitSystem(component: *MyComponent) !void {
     component.inner = 42;
 }
+fn myOtherInitSystem(component: *MyOtherComponent) !void {
+    component.inner = 42;
+}
+fn myComboInitSystem(component: *MyComponent, component1: *MyOtherComponent) !void {
+    component.inner = 42;
+    component1.inner = 2;
+}
 
 fn myLoadSystem(component: *MyComponent) !void {
     component.inner = 73;
@@ -101,6 +108,7 @@ test "addSystem / runSystem" {
 
     const entity = try world.newEntity();
     try world.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.addComponent(entity, MyOtherComponent{ .inner = 67 });
     try world.addSystem(.init, myInitSystem);
     try world.addSystem(.load, myLoadSystem);
 

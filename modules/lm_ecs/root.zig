@@ -17,3 +17,6 @@ pub const CleanupMarks = @import("CleanupMarks.zig");
 //                  .tick
 //                  .draw
 //                  .deinit
+
+// pub const build(w: *World) !void { ... }
+// lm_ecs.world("default", @import("default_world.zig"));
