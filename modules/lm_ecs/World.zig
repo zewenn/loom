@@ -223,7 +223,12 @@ fn addSystem(self: *Self, stage: Stage, system: System) !void {
 
 pub fn runStage(self: *Self, stage: Stage) !void {
     self.mutex.lock();
-    defer self.mutex.unlock();
+    defer {
+        self.mutex.unlock();
+        self.applyCommandBuffer() catch |err| {
+            std.log.err("command buffer could not be applied: {any}", .{err});
+        };
+    }
 
     const system_list = &(self.systems.get(stage) orelse return);
     if (system_list.len() == 0) return;
@@ -287,7 +292,6 @@ pub fn runStage(self: *Self, stage: Stage) !void {
     }
 
     wg.wait();
-    try self.applyCommandBuffer();
 }
 
 fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque) void {
@@ -333,6 +337,16 @@ fn removeSystem(self: *Self, stage: Stage, system: System) !void {
 
 pub fn applyCommandBuffer(self: *Self) !void {
     for (self.command_buffer.commands.items()) |cmd| switch (cmd) {
+        .make_entity => |arr| {
+            defer self.command_buffer.allocator.free(arr);
+
+            const entity = try self.newEntity();
+            for (arr) |info| {
+                const start = info.data_offset;
+                const end = info.data_offset + info.data_size;
+                try self.addComponent(entity, info.type_hash, info.data_size, self.command_buffer.data.items()[start..end].ptr);
+            }
+        },
         .add_component => |info| {
             const start = info.data_offset;
             const end = info.data_offset + info.data_size;
@@ -380,11 +394,11 @@ fn runCleanup(self: *Self) void {
 
     outer: for (self.cleanup_marks.systems.items()) |kv| {
         const stage = kv.key;
-        const hash = kv.value;
+        const target_system_id = kv.value;
 
         const stage_list = self.systems.getPtr(stage) orelse continue;
-        for (stage_list.items(), 0..) |item, index| {
-            if (item.id != hash) continue;
+        for (stage_list.items(), 0..) |system, index| {
+            if (system.id != target_system_id) continue;
 
             _ = stage_list.swapRemove(index);
             continue :outer;

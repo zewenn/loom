@@ -8,7 +8,14 @@ const Stage = ecs.Stage;
 const System = ecs.System;
 const Entity = ecs.Entity;
 
+const ComponentDescriptor = struct {
+    type_hash: u64,
+    data_offset: usize, // Index into the byte buffer
+    data_size: usize,
+};
+
 const Command = union(enum) {
+    make_entity: []ComponentDescriptor,
     add_component: struct {
         entity: Entity,
         type_hash: u64,
@@ -39,14 +46,41 @@ pub const CommandBuffer = struct {
         };
     }
 
-    pub fn deinit(self: *CommandBuffer) void {
+    pub fn deinit(self: *Self) void {
         self.commands.deinit();
         self.data.deinit();
 
         self.* = undefined;
     }
 
-    pub fn addComponent(self: *CommandBuffer, entity: Entity, component: anytype) !void {
+    pub fn makeEntity(self: *Self, components: anytype) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (!core.types.isTuple(components)) @compileError("components must be a tuple");
+
+        var list = core.List(ComponentDescriptor).init(self.allocator);
+        defer list.deinit();
+
+        inline for (components) |component| {
+            const T: type = @TypeOf(component);
+            const hash = comptime core.type_erasure.typeToHash(T);
+            const size = @sizeOf(T);
+
+            const offset = self.data.len();
+            try self.data.appendSlice(std.mem.asBytes(&component));
+
+            try list.append(.{
+                .type_hash = hash,
+                .data_size = size,
+                .data_offset = offset,
+            });
+        }
+
+        try self.commands.append(.{ .make_entity = try list.toOwnedSlice() });
+    }
+
+    pub fn addComponent(self: *Self, entity: Entity, component: anytype) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -67,14 +101,14 @@ pub const CommandBuffer = struct {
         });
     }
 
-    pub fn addComponents(self: *CommandBuffer, entity: Entity, components: anytype) !void {
+    pub fn addComponents(self: *Self, entity: Entity, components: anytype) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         if (!core.types.isTuple(components)) @compileError("components must be a tuple");
 
         inline for (components) |component| {
-            const T = @TypeOf(component);
+            const T: type = @TypeOf(component);
             const hash = comptime core.type_erasure.typeToHash(T);
             const size = @sizeOf(T);
 
@@ -135,7 +169,7 @@ pub const CommandBuffer = struct {
         });
     }
 
-    pub fn reset(self: *CommandBuffer) void {
+    pub fn reset(self: *Self) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 

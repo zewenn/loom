@@ -27,7 +27,10 @@ fn myComboInitSystem(res: *MyThirdComponent, component: *const MyComponent, comp
 }
 
 fn myContextSystem(ctx: *ecs.Context, _: *const MyComponent) !void {
-    try std.testing.expect(ctx.getComponent(MyComponent) != null);
+    try ctx.makeEntity(.{MyThirdComponent{ .inner = 77 }});
+}
+fn myContextTestSystem(third: *const MyThirdComponent) !void {
+    try std.testing.expectEqual(77, third.inner);
 }
 
 fn myLoadSystem(component: *MyComponent) !void {
@@ -110,7 +113,6 @@ test "addSystem / runSystem" {
     try world.command_buffer.addComponent(entity, MyOtherComponent{ .inner = 67 });
 
     try world.command_buffer.addSystem(.init, myInitSystem);
-    try world.command_buffer.addSystem(.init, myContextSystem);
     try world.command_buffer.addSystem(.load, myLoadSystem);
 
     try world.applyCommandBuffer();
@@ -223,4 +225,19 @@ test "removeSystem" {
     try world.runStage(.init);
 
     try std.testing.expectEqual(67, result.inner);
+}
+
+test "context" {
+    var world: World = .init(std.testing.allocator);
+    defer world.deinit();
+
+    const entity = try world.newEntity();
+
+    try world.command_buffer.addComponent(entity, MyComponent{ .inner = 67 });
+    try world.command_buffer.addSystem(.init, myContextSystem);
+    try world.command_buffer.addSystem(.load, myContextTestSystem);
+    try world.applyCommandBuffer();
+
+    try world.runStage(.init);
+    try world.runStage(.load);
 }

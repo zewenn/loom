@@ -9,19 +9,9 @@ const Self = @This();
 world: *ecs.World,
 entity: ecs.Entity,
 
-// TODO: fix this and move to the command buffer
-// pub inline fn newEntity(self: *Self) !ecs.Entity {
-//     return try self.world.newEntity();
-// }
-
-// /// Creates an entity, but the component's will only be added after the stage has run.
-// pub fn makeEntity(self: *Self, components: anytype) !ecs.Entity {
-//     const entity = try self.world.newEntity();
-
-//     try self.world.command_buffer.addComponents(entity, components);
-
-//     return entity;
-// }
+pub inline fn makeEntity(self: *Self, components: anytype) !void {
+    try self.world.command_buffer.makeEntity(components);
+}
 
 pub inline fn isEntityAlive(self: *Self, entity: ecs.Entity) bool {
     return self.world.isEntityAlive(entity);
