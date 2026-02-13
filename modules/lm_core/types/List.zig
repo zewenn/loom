@@ -185,6 +185,10 @@ pub fn List(comptime T: type) type {
             self.arrlist.shrinkRetainingCapacity(new_len);
         }
 
+        pub inline fn ensureTotalCapacity(self: *Self, new_capacity: usize) !void {
+            try self.arrlist.ensureTotalCapacity(self.allocator, new_capacity);
+        }
+
         pub inline fn toOwnedSlice(self: *Self) ![]T {
             return try self.arrlist.toOwnedSlice(self.allocator);
         }

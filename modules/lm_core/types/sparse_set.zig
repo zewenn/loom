@@ -59,8 +59,34 @@ pub fn SparseSet(comptime DENSE_T: type) type {
             return &self.dense.items()[dense_index];
         }
 
+        pub fn getKeyByValue(self: *Self, value: DENSE_T) ?usize {
+            for (self.dense.items(), 0..) |item, index| {
+                const eqls = switch (@typeInfo(DENSE_T)) {
+                    .int, .comptime_int, .float, .comptime_float, .bool, .@"enum" => item == value,
+                    else => std.meta.eql(value, item),
+                };
+
+                if (!eqls) continue;
+
+                return self.backlink.items()[index];
+            }
+            return null;
+        }
+
         pub fn contains(self: *Self, at: usize) bool {
             return self.get(at) != null;
+        }
+
+        pub fn containsValue(self: *Self, value: DENSE_T) bool {
+            for (self.dense.items()) |item| {
+                const eqls = switch (@typeInfo(DENSE_T)) {
+                    .int, .comptime_int, .float, .comptime_float, .bool, .@"enum" => item == value,
+                    else => std.meta.eql(value, item),
+                };
+
+                if (eqls) return true;
+            }
+            return false;
         }
 
         pub fn remove(self: *Self, at: usize) void {
