@@ -4,6 +4,7 @@ pub const Stage = @import("stages.zig").Stage;
 pub const Entity = usize;
 pub const CleanupMarks = @import("CleanupMarks.zig");
 pub const CommandBuffer = @import("commands.zig").CommandBuffer;
+pub const Context = @import("Context.zig");
 
 // Plan:
 // const MyComponent = struct { ... };

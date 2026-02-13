@@ -26,6 +26,10 @@ fn myComboInitSystem(res: *MyThirdComponent, component: *const MyComponent, comp
     res.inner = component.inner + component1.inner;
 }
 
+fn myContextSystem(ctx: *ecs.Context, _: *const MyComponent) !void {
+    try std.testing.expect(ctx.getComponent(MyComponent) != null);
+}
+
 fn myLoadSystem(component: *MyComponent) !void {
     component.inner = 73;
 }
@@ -106,6 +110,7 @@ test "addSystem / runSystem" {
     try world.command_buffer.addComponent(entity, MyOtherComponent{ .inner = 67 });
 
     try world.command_buffer.addSystem(.init, myInitSystem);
+    try world.command_buffer.addSystem(.init, myContextSystem);
     try world.command_buffer.addSystem(.load, myLoadSystem);
 
     try world.applyCommandBuffer();

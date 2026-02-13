@@ -14,6 +14,8 @@ const Self = @This();
 cleanup_marks: ecs.CleanupMarks,
 systems: std.AutoHashMap(Stage, core.List(System)),
 
+mutex: std.Thread.Mutex,
+
 available_entity_ids: core.List(usize),
 next_entity_index: usize = 0,
 
@@ -44,6 +46,7 @@ pub fn init(allocator: Allocator) Self {
 
         .available_entity_ids = .init(allocator),
         .next_entity_index = 0,
+        .mutex = .{},
 
         .thread_pool = null,
         .run_stage_scratch_memory = .init(allocator),
@@ -137,10 +140,18 @@ fn generateComponentMask(self: *Self, hashes: []const u64) ?u128 {
 // --------------------------------------------------------------------------------------------------------
 
 pub fn newEntity(self: *Self) !Entity {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
     const new_id = self.available_entity_ids.pop() orelse get: {
         defer self.next_entity_index += 1;
         break :get self.next_entity_index;
     };
+
+    try self.command_buffer.addComponent(new_id, ecs.Context{
+        .world = self,
+        .entity = new_id,
+    });
 
     try self.masks.set(new_id, 0);
     return new_id;
@@ -154,6 +165,9 @@ fn removeEntity(self: *Self, entity: Entity) !void {
 // --------------------------------------------------------------------------------------------------------
 
 fn addComponent(self: *Self, entity: Entity, entry_id: u64, entry_size: usize, entry: *const anyopaque) !void {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
     self.assertValidEntityId(entity);
 
     if (!self.type_bit_index_set.containsValue(entry_id)) {
@@ -184,7 +198,7 @@ pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
     return store.getAs(entity, T);
 }
 
-pub fn getConstComponent(self: *Self, comptime T: type, entity: Entity) ?*const T {
+pub fn getComponentConst(self: *Self, comptime T: type, entity: Entity) ?*const T {
     if (!self.isEntityAlive(entity)) return null;
 
     const store = self.getComponentStore(T) orelse return null;
@@ -208,6 +222,9 @@ fn addSystem(self: *Self, stage: Stage, system: System) !void {
 }
 
 pub fn runStage(self: *Self, stage: Stage) !void {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
     const system_list = &(self.systems.get(stage) orelse return);
     if (system_list.len() == 0) return;
 
