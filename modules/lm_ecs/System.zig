@@ -50,6 +50,15 @@ pub fn overlaps(self: Self, other: Self) bool {
         (self_read_mask & other_write_mask) != 1);
 }
 
+pub fn overlapsMasks(self: Self, other_write_mask: u128, other_read_mask: u128) bool {
+    const self_write_mask = self.write_mask orelse return true;
+    const self_read_mask = self.read_mask orelse return true;
+
+    return ((self_write_mask & other_write_mask) != 0 and
+        (self_write_mask & other_read_mask) != 0 and
+        (self_read_mask & other_write_mask) != 1);
+}
+
 pub fn hasMasks(self: Self) bool {
     return self.bit_mask != null and self.write_mask != null and self.read_mask != null;
 }

@@ -8,11 +8,13 @@ const System = ecs.System;
 const Stage = ecs.Stage;
 const Entity = ecs.Entity;
 const CommandBuffer = ecs.CommandBuffer;
+const StageInfo = @import("stages.zig").StageInfo;
 
 const Self = @This();
 
 cleanup_marks: ecs.CleanupMarks,
-systems: std.AutoHashMap(Stage, core.List(System)),
+// systems: std.AutoHashMap(Stage, core.List(System)),
+systems: core.types.SparseSet(StageInfo),
 
 mutex: std.Thread.Mutex,
 
@@ -65,9 +67,8 @@ pub fn deinit(self: *Self) void {
     }
     self.stores.deinit();
 
-    var systems_iterator = self.systems.valueIterator();
-    while (systems_iterator.next()) |system_list| {
-        system_list.deinit();
+    for (self.systems.dense.items()) |*info| {
+        info.deinit();
     }
     self.systems.deinit();
 
@@ -119,21 +120,6 @@ inline fn assertValidEntityId(self: *Self, id: Entity) void {
         "{d} was outside of created entities",
         .{id},
     );
-}
-
-fn generateComponentMask(self: *Self, hashes: []const u64) ?u128 {
-    var current_bitmask: u128 = 0b0;
-
-    for (hashes) |hash| {
-        const bit_index = self.type_bit_index_set.getKeyByValue(hash) orelse return null;
-        const shift = core.types.coerceTo(u7, bit_index) orelse return null;
-
-        const base_mask: u128 = 0b1;
-        const shifted = base_mask << shift;
-        current_bitmask = current_bitmask | shifted;
-    }
-
-    return current_bitmask;
 }
 
 // Entities
@@ -214,11 +200,12 @@ fn removeComponent(self: *Self, entity: Entity, hash: u64) !void {
 // --------------------------------------------------------------------------------------------------------
 
 fn addSystem(self: *Self, stage: Stage, system: System) !void {
-    if (!self.systems.contains(stage))
-        try self.systems.put(stage, .init(self.allocator));
+    const at = core.types.coerceTo(usize, stage).?;
+    if (!self.systems.contains(at))
+        try self.systems.set(at, .init(self.allocator, self));
 
-    const ptr = self.systems.getPtr(stage).?;
-    try ptr.append(system);
+    const info = self.systems.getPtr(at) orelse return;
+    try info.addSystem(system);
 }
 
 pub fn runStage(self: *Self, stage: Stage) !void {
@@ -230,52 +217,11 @@ pub fn runStage(self: *Self, stage: Stage) !void {
         };
     }
 
-    const system_list = &(self.systems.get(stage) orelse return);
-    if (system_list.len() == 0) return;
-
-    var batches: core.List(core.List(System)) = .init(self.allocator);
-    defer {
-        for (batches.items()) |*batch| {
-            batch.deinit();
-        }
-        batches.deinit();
-    }
-
-    // TODO:    store this info in an array, only update
-    //          when stage systems are changed
-    var max_hash_count: usize = system_list.getFirst().hashes.len;
-    // TODO:    impl caching for system batches, only update
-    //          when stage systems are changed
-    batch_handler: for (system_list.items()) |*system| {
-        if (system.hashes.len > max_hash_count) max_hash_count = system.hashes.len;
-
-        // TODO:    automatically do this when a new system is added to
-        //          avoid "cold starts"
-        if (!system.hasMasks()) {
-            system.bit_mask = self.generateComponentMask(system.hashes);
-            system.write_mask = self.generateComponentMask(system.write_hashes);
-            system.read_mask = self.generateComponentMask(system.read_hashes);
-        }
-
-        if (!system.hasMasks()) continue;
-
-        batch_iter: for (batches.items()) |*batch| {
-            // TODO:    just store the batch's current bitmask to save iterations
-            for (batch.items()) |other| if (system.*.overlaps(other)) continue :batch_iter;
-
-            try batch.append(system.*);
-            continue :batch_handler;
-        }
-
-        try batches.append(.init(self.allocator));
-
-        const new = &batches.items()[batches.len() - 1];
-        try new.append(system.*);
-    }
-
+    const stage_info = self.systems.getPtr(core.types.coerceTo(usize, stage).?) orelse return;
+    const batches = stage_info.batches;
     if (batches.len() == 0) return;
 
-    try self.run_stage_scratch_memory.resize(max_hash_count * 2 * batches.len());
+    try self.run_stage_scratch_memory.resize(stage_info.max_hash_count * 2 * batches.len());
     const memory = self.run_stage_scratch_memory.items();
 
     if (self.thread_pool == null) {
@@ -287,8 +233,8 @@ pub fn runStage(self: *Self, stage: Stage) !void {
     var wg: std.Thread.WaitGroup = .{};
 
     for (batches.items(), 0..) |batch, index| {
-        const start = max_hash_count * 2 * index;
-        const end = max_hash_count * 2 * (index + 1);
+        const start = stage_info.max_hash_count * 2 * index;
+        const end = stage_info.max_hash_count * 2 * (index + 1);
 
         pool.spawnWg(&wg, executeBatch, .{ self, batch.items(), memory[start..end] });
     }
@@ -401,16 +347,11 @@ fn runCleanup(self: *Self) void {
         store.remove(entity);
     }
 
-    outer: for (self.cleanup_marks.systems.items()) |kv| {
-        const stage = kv.key;
+    for (self.cleanup_marks.systems.items()) |kv| {
+        const stage = core.types.coerceTo(usize, kv.key).?;
         const target_system_id = kv.value;
 
         const stage_list = self.systems.getPtr(stage) orelse continue;
-        for (stage_list.items(), 0..) |system, index| {
-            if (system.id != target_system_id) continue;
-
-            _ = stage_list.swapRemove(index);
-            continue :outer;
-        }
+        stage_list.removeSystem(target_system_id);
     }
 }

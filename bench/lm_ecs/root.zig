@@ -25,11 +25,16 @@ const simFor1MilEntities = struct {
     pub fn init(allocator: Allocator) !void {
         world = .init(allocator);
 
-        for (0..1_000_000) |_| {
+        for (0..500_000) |_| {
             const entity = try world.newEntity();
             try world.command_buffer.addComponents(entity, .{
                 TestComponent{},
-                OtherTestComponent{ .inner = 67 },
+            });
+        }
+        for (0..500_000) |_| {
+            const entity = try world.newEntity();
+            try world.command_buffer.addComponents(entity, .{
+                OtherTestComponent{},
             });
         }
 
