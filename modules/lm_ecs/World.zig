@@ -27,7 +27,8 @@ next_component_bit_index: u7 = 0,
 
 stores: std.AutoHashMap(u64, core.types.ByteSparseSet),
 
-thread_pool: ?std.Thread.Pool,
+system_batch_thread_pool: ?std.Thread.Pool,
+entity_thread_pool: ?std.Thread.Pool,
 run_stage_scratch_memory: core.List(*anyopaque),
 cleanup_scratch_memory: core.List(*anyopaque),
 
@@ -50,7 +51,8 @@ pub fn init(allocator: Allocator) Self {
         .next_entity_index = 0,
         .mutex = .{},
 
-        .thread_pool = null,
+        .system_batch_thread_pool = null,
+        .entity_thread_pool = null,
         .run_stage_scratch_memory = .init(allocator),
         .cleanup_scratch_memory = .init(allocator),
 
@@ -76,7 +78,8 @@ pub fn deinit(self: *Self) void {
     self.type_bit_index_set.deinit();
     self.available_entity_ids.deinit();
 
-    if (self.thread_pool) |*pool| pool.deinit();
+    if (self.system_batch_thread_pool) |*pool| pool.deinit();
+    if (self.entity_thread_pool) |*pool| pool.deinit();
     self.run_stage_scratch_memory.deinit();
     self.cleanup_scratch_memory.deinit();
 
@@ -221,63 +224,98 @@ pub fn runStage(self: *Self, stage: Stage) !void {
     const batches = stage_info.batches;
     if (batches.len() == 0) return;
 
-    try self.run_stage_scratch_memory.resize(stage_info.max_hash_count * 2 * batches.len());
+    const entity_threads: usize = @max(1, @min(@divFloor(self.next_entity_index - 1, 8192), 16));
+
+    try self.run_stage_scratch_memory.resize(stage_info.max_hash_count * (entity_threads + 1) * batches.len());
     const memory = self.run_stage_scratch_memory.items();
 
-    if (self.thread_pool == null) {
-        self.thread_pool = undefined;
-        try self.thread_pool.?.init(.{ .allocator = self.allocator, .n_jobs = 16 });
+    if (self.system_batch_thread_pool == null) {
+        self.system_batch_thread_pool = undefined;
+        try self.system_batch_thread_pool.?.init(.{ .allocator = self.allocator, .n_jobs = batches.len() });
     }
 
-    const pool = &(self.thread_pool orelse return);
+    if (self.entity_thread_pool == null) {
+        self.entity_thread_pool = undefined;
+        try self.entity_thread_pool.?.init(.{
+            .allocator = self.allocator,
+            .n_jobs = batches.len() * entity_threads,
+        });
+    }
+
+    const pool = &(self.system_batch_thread_pool orelse return);
     var wg: std.Thread.WaitGroup = .{};
 
     for (batches.items(), 0..) |batch, index| {
-        const start = stage_info.max_hash_count * 2 * index;
-        const end = stage_info.max_hash_count * 2 * (index + 1);
+        const start = stage_info.max_hash_count * (entity_threads + 1) * index;
+        const end = stage_info.max_hash_count * (entity_threads + 1) * (index + 1);
 
-        pool.spawnWg(&wg, executeBatch, .{ self, batch.items(), memory[start..end] });
+        pool.spawnWg(&wg, executeBatch, .{ self, batch.items(), memory[start..end], entity_threads });
     }
 
     wg.wait();
 }
 
-fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque) void {
+fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque, entity_groups: usize) void {
     outer: for (systems) |system| {
         const group_mask = system.bit_mask orelse continue;
         const hash_count = system.hashes.len;
 
-        const components = memory[0..hash_count];
-        const stores = memory[hash_count .. hash_count * 2];
+        const stores = memory[0..hash_count];
+        // const components = memory[hash_count .. hash_count * 2];
 
         // TODO:    cache this to avoid hashmap lookups
         //          when a new store gets added systems need to be refreshed :(
+        var smallest_store: *core.types.ByteSparseSet = undefined;
         for (system.hashes, 0..) |hash, index| {
-            stores[index] = self.stores.getPtr(hash) orelse continue :outer;
-        }
+            const store = self.stores.getPtr(hash) orelse continue :outer;
+            stores[index] = store;
 
-        // TODO:    cache this on the system and only modify if a new component
-        //          has been added to a store matched by the bitmask
-        var smallest_store: *core.types.ByteSparseSet = core.ptrCast(core.types.ByteSparseSet, stores[0]);
-        for (stores[1..]) |ptr| {
-            const store = core.ptrCast(core.types.ByteSparseSet, ptr);
+            if (index == 0) {
+                smallest_store = store;
+                continue;
+            }
+
             if (store.len() < smallest_store.len()) smallest_store = store;
         }
 
-        // TODO:    add thread pooling to this to make entity processing faster
-        entities: for (smallest_store.backlink.items()) |entity| {
-            const entity_mask = self.masks.get(entity).?;
-            if ((group_mask & entity_mask) != group_mask) continue;
+        const pool = &(self.entity_thread_pool orelse {
+            std.log.err("entity pool does not exist", .{});
+            return;
+        });
+        var wg: std.Thread.WaitGroup = .{};
 
-            for (stores, 0..) |raw_ptr, index| {
-                const store = core.ptrCast(core.types.ByteSparseSet, raw_ptr);
+        const entity_len = smallest_store.backlink.len();
+        const size: usize = @max(1, @divFloor(entity_len, entity_groups));
+        const rem: usize = @rem(entity_len, entity_groups);
 
-                const new_ptr = store.get(entity) orelse continue :entities;
-                components[index] = new_ptr;
-            }
+        for (0..entity_groups) |group_index| {
+            const components = memory[(hash_count * (group_index + 1))..][0..hash_count];
+            const entities =
+                if (group_index != entity_groups - 1 or rem == 0)
+                    smallest_store.backlink.items()[size * group_index ..][0..size]
+                else
+                    smallest_store.backlink.items()[size * group_index ..][0..rem];
 
-            system.invoke(components);
+            pool.spawnWg(&wg, invokeBatch, .{ self, system, group_mask, entities, stores, components });
         }
+
+        wg.wait();
+    }
+}
+
+inline fn invokeBatch(self: *Self, system: System, group_mask: u128, entities: []usize, stores: []*anyopaque, components: []*anyopaque) void {
+    entities: for (entities) |entity| {
+        const entity_mask = self.masks.get(entity).?;
+        if ((group_mask & entity_mask) != group_mask) continue;
+
+        for (stores, 0..) |raw_ptr, index| {
+            const store = core.ptrCast(core.types.ByteSparseSet, raw_ptr);
+
+            const new_ptr = store.get(entity) orelse continue :entities;
+            components[index] = new_ptr;
+        }
+
+        system.invoke(components);
     }
 }
 
