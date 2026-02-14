@@ -13,3 +13,5 @@ pub const Stage = enum {
     draw,
     deinit,
 };
+
+pub const StageInfo = struct {};

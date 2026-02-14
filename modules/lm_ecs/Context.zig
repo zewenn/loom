@@ -41,22 +41,6 @@ pub inline fn addComponentsTo(self: *Self, entity: ecs.Entity, components: anyty
     try self.world.command_buffer.addComponents(entity, components);
 }
 
-pub inline fn getComponent(self: *Self, comptime T: type) ?*T {
-    return self.world.getComponent(T, self.entity);
-}
-
-pub inline fn getComponentFrom(self: *Self, entity: ecs.Entity, comptime T: type) ?*T {
-    return self.world.getComponent(T, entity);
-}
-
-pub inline fn getComponentConst(self: *Self, comptime T: type) ?*const T {
-    return self.world.getComponentConst(T, self.entity);
-}
-
-pub inline fn getComponentConstFrom(self: *Self, entity: ecs.Entity, comptime T: type) ?*T {
-    return self.world.getComponentConst(T, entity);
-}
-
 pub inline fn removeComponent(self: *Self, comptime T: type) !void {
     try self.world.command_buffer.removeComponent(self.entity, T);
 }

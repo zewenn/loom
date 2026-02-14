@@ -96,7 +96,7 @@ fn getComponentStoresByBits(self: *Self, bits: u128, buffer: *core.List(*anyopaq
     try buffer.ensureTotalCapacity(128);
 
     var index: u7 = 0;
-    while (index < 127) : (index += 1) {
+    while (index < @min(127, self.next_component_bit_index)) : (index += 1) {
         const base_mask: u128 = 0b1;
         const shifted = base_mask << @intCast(index);
 
@@ -241,10 +241,16 @@ pub fn runStage(self: *Self, stage: Stage) !void {
         batches.deinit();
     }
 
+    // TODO:    store this info in an array, only update
+    //          when stage systems are changed
     var max_hash_count: usize = system_list.getFirst().hashes.len;
-    for (system_list.items()) |*system| {
+    // TODO:    impl caching for system batches, only update
+    //          when stage systems are changed
+    batch_handler: for (system_list.items()) |*system| {
         if (system.hashes.len > max_hash_count) max_hash_count = system.hashes.len;
 
+        // TODO:    automatically do this when a new system is added to
+        //          avoid "cold starts"
         if (!system.hasMasks()) {
             system.bit_mask = self.generateComponentMask(system.hashes);
             system.write_mask = self.generateComponentMask(system.write_hashes);
@@ -253,16 +259,13 @@ pub fn runStage(self: *Self, stage: Stage) !void {
 
         if (!system.hasMasks()) continue;
 
-        var found = false;
         batch_iter: for (batches.items()) |*batch| {
+            // TODO:    just store the batch's current bitmask to save iterations
             for (batch.items()) |other| if (system.*.overlaps(other)) continue :batch_iter;
 
             try batch.append(system.*);
-            found = true;
-            break;
+            continue :batch_handler;
         }
-
-        if (found) continue;
 
         try batches.append(.init(self.allocator));
 
@@ -281,7 +284,6 @@ pub fn runStage(self: *Self, stage: Stage) !void {
     }
 
     const pool = &(self.thread_pool orelse return);
-
     var wg: std.Thread.WaitGroup = .{};
 
     for (batches.items(), 0..) |batch, index| {
@@ -302,16 +304,21 @@ fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque) void
         const components = memory[0..hash_count];
         const stores = memory[hash_count .. hash_count * 2];
 
+        // TODO:    cache this to avoid hashmap lookups
+        //          when a new store gets added systems need to be refreshed :(
         for (system.hashes, 0..) |hash, index| {
             stores[index] = self.stores.getPtr(hash) orelse continue :outer;
         }
 
+        // TODO:    cache this on the system and only modify if a new component
+        //          has been added to a store matched by the bitmask
         var smallest_store: *core.types.ByteSparseSet = core.ptrCast(core.types.ByteSparseSet, stores[0]);
         for (stores[1..]) |ptr| {
             const store = core.ptrCast(core.types.ByteSparseSet, ptr);
             if (store.len() < smallest_store.len()) smallest_store = store;
         }
 
+        // TODO:    add thread pooling to this to make entity processing faster
         entities: for (smallest_store.backlink.items()) |entity| {
             const entity_mask = self.masks.get(entity).?;
             if ((group_mask & entity_mask) != group_mask) continue;
@@ -354,6 +361,7 @@ pub fn applyCommandBuffer(self: *Self) !void {
         },
         .add_system => |info| try self.addSystem(info.stage, info.system),
 
+        // TODO:    rework removes to actually remove and not fuck with the heap
         .remove_entity => |entity| try self.removeEntity(entity),
         .remove_component => |data| try self.removeComponent(data.entity, data.type_hash),
         .remove_system => |info| try self.removeSystem(info.stage, info.system),
@@ -362,6 +370,7 @@ pub fn applyCommandBuffer(self: *Self) !void {
     self.runCleanup();
 }
 
+// TODO:    remove unnecessary allocations for removals, this can be merged into applyCommandBuffer
 fn runCleanup(self: *Self) void {
     defer {
         self.command_buffer.reset();
