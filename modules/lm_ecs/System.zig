@@ -10,6 +10,12 @@ const Fn = std.builtin.Type.Fn;
 const StructField = std.builtin.Type.StructField;
 const Param = Fn.Param;
 
+const HashQuery = struct {
+    all: []const u64,
+    write: []const u64,
+    read: []const u64,
+};
+
 id: u64,
 name: []const u8,
 callback: *const fn ([]const *anyopaque) anyerror!void,
@@ -22,13 +28,14 @@ write_mask: ?u128 = null,
 read_mask: ?u128 = null,
 
 pub fn init(comptime func: anytype) Self {
+    const hashes = comptime getHashes(func);
     return Self{
         .id = comptime core.type_erasure.typeToHash(@TypeOf(func)),
         .name = @typeName(@TypeOf(func)),
         .callback = comptime wrapFunction(func),
-        .hashes = comptime getHashes(func),
-        .write_hashes = comptime getWriteHashes(func),
-        .read_hashes = comptime getReadHashes(func),
+        .hashes = hashes.all,
+        .write_hashes = hashes.write,
+        .read_hashes = hashes.read,
     };
 }
 
@@ -83,55 +90,34 @@ fn getTypes(comptime params: []const Param) []const type {
     return types.items();
 }
 
-fn getHashes(comptime func: anytype) []const u64 {
+fn getHashes(comptime func: anytype) HashQuery {
     const params = comptime getParams(func);
-    var list: core.ComptimeList(u64) = .init();
+
+    var all: core.ComptimeList(u64) = .init();
+    var write: core.ComptimeList(u64) = .init();
+    var read: core.ComptimeList(u64) = .init();
 
     inline for (params) |param| {
         const BASE = param.type orelse continue;
-        const T = switch (@typeInfo(BASE)) {
-            .pointer => |wrapping| wrapping.child,
+        const ptr = switch (@typeInfo(BASE)) {
+            .pointer => |wrapping| wrapping,
             else => @compileError("system param cannot be a non pointer type"),
         };
+        const hash = comptime core.type_erasure.typeToHash(ptr.child);
 
-        list.append(comptime core.type_erasure.typeToHash(T));
+        if (ptr.is_const)
+            read.append(hash)
+        else
+            write.append(hash);
+
+        all.append(hash);
     }
 
-    return list.items();
-}
-
-fn getReadHashes(comptime func: anytype) []const u64 {
-    const params = comptime getParams(func);
-    var list: core.ComptimeList(u64) = .init();
-
-    inline for (params) |param| {
-        const BASE = param.type orelse continue;
-        const T = switch (@typeInfo(BASE)) {
-            .pointer => |wrapping| if (wrapping.is_const) wrapping.child else continue,
-            else => @compileError("system param cannot be a non pointer type"),
-        };
-
-        list.append(comptime core.type_erasure.typeToHash(T));
-    }
-
-    return list.items();
-}
-
-fn getWriteHashes(comptime func: anytype) []const u64 {
-    const params = comptime getParams(func);
-    var list: core.ComptimeList(u64) = .init();
-
-    inline for (params) |param| {
-        const BASE = param.type orelse continue;
-        const T = switch (@typeInfo(BASE)) {
-            .pointer => |wrapping| if (!wrapping.is_const) wrapping.child else continue,
-            else => @compileError("system param cannot be a non pointer type"),
-        };
-
-        list.append(comptime core.type_erasure.typeToHash(T));
-    }
-
-    return list.items();
+    return .{
+        .all = all.items(),
+        .write = write.items(),
+        .read = read.items(),
+    };
 }
 
 pub fn wrapFunction(comptime func: anytype) *const fn ([]const *anyopaque) anyerror!void {

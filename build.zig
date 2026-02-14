@@ -168,6 +168,14 @@ pub fn build(b: *std.Build) !void {
     });
     test_module.addImport("loom", loom_mod);
 
+    const bench_module = b.addModule("bench", .{
+        .root_source_file = b.path("bench/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    bench_module.addImport("loom", loom_mod);
+
     const core = builder.module(b, "lm_core", .{
         .target = target,
         .optimize = optimize,
@@ -175,14 +183,21 @@ pub fn build(b: *std.Build) !void {
     const core_import = Import{ .name = "lm_core", .module = core };
     loom_mod.addImport("lm_core", core);
     test_module.addImport("lm_core", core);
+    bench_module.addImport("lm_core", core);
 
-    builder.link(b, &.{ loom_mod, test_module }, "lm_ecs", .{
-        .dependency_options = .none,
-        .target = target,
-        .optimize = optimize,
+    const modules: []const []const u8 = &.{
+        "lm_ecs",
+    };
 
-        .imports = &.{core_import},
-    });
+    inline for (modules) |mod_name| {
+        builder.link(b, &.{ loom_mod, test_module, bench_module }, mod_name, .{
+            .dependency_options = .none,
+            .target = target,
+            .optimize = optimize,
+
+            .imports = &.{core_import},
+        });
+    }
 
     const lib = b.addLibrary(.{
         .linkage = .static,
@@ -190,6 +205,15 @@ pub fn build(b: *std.Build) !void {
         .root_module = loom_mod,
     });
     b.installArtifact(lib);
+
+    const bench = b.addExecutable(.{
+        .name = "benchmarks",
+        .root_module = bench_module,
+    });
+
+    const bench_run_step = b.addRunArtifact(bench);
+    const bench_step = b.step("bench", "Run benchmarks");
+    bench_step.dependOn(&bench_run_step.step);
 
     const main_module_unit_test = b.addTest(.{
         .name = "loom unit tests",

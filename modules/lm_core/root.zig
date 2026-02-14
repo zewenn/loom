@@ -10,6 +10,7 @@ pub const ByteList = types.ByteList;
 pub const PagedList = types.PagedList;
 pub const coerceTo = types.coerceTo;
 pub const iterator_functions = types.iterator_functions;
+pub const benchmarking = @import("benchmarking.zig");
 
 pub const type_erasure = @import("type_erasure.zig");
 
