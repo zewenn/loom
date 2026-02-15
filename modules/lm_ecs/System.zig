@@ -18,6 +18,11 @@ const HashQuery = struct {
 
 id: u64,
 name: []const u8,
+// TODO:    change systems to use bulk component arrays instead of single pointers
+//          fn signiture changes from fn ([]const *anyopaque) !void to
+//          fn ([]const []u8) !void probably
+//          system changes from fn (mycomp: *mut, other: *const c) !void to
+//          fn (mycomp: []mut, other: []const c) !void
 callback: *const fn ([]const *anyopaque) anyerror!void,
 hashes: []const u64,
 write_hashes: []const u64,

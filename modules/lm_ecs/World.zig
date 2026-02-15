@@ -21,7 +21,10 @@ mutex: std.Thread.Mutex,
 available_entity_ids: core.List(usize),
 next_entity_index: usize = 0,
 
-masks: core.types.SparseSet(u128),
+// TODO:    change masks to no longer use a sparse set
+//          use a flat list instead to avoid pagedlists
+// masks: core.types.SparseSet(u128),
+masks: core.List(u128),
 type_bit_index_set: core.types.SparseSet(u64),
 next_component_bit_index: u7 = 0,
 
@@ -142,12 +145,26 @@ pub fn newEntity(self: *Self) !Entity {
         .entity = new_id,
     });
 
-    try self.masks.set(new_id, 0);
+    if (self.masks.len() <= new_id) {
+        try self.masks.resize(new_id + 1);
+    }
+    self.masks.items()[new_id] = 0;
+
     return new_id;
 }
 
-fn removeEntity(self: *Self, entity: Entity) !void {
-    try self.cleanup_marks.entities.append(entity);
+fn removeEntity(self: *Self, entity: Entity) void {
+    if (!self.isEntityAlive(entity)) return;
+
+    const bits = self.masks.at(entity) orelse return;
+    self.getComponentStoresByBits(bits, &self.cleanup_scratch_memory) catch return;
+
+    for (self.cleanup_scratch_memory.items()) |mem| {
+        const store = core.ptrCast(core.types.ByteSparseSet, mem);
+        store.remove(entity);
+    }
+
+    self.available_entity_ids.append(entity) catch return;
 }
 
 // Components
@@ -169,9 +186,9 @@ fn addComponent(self: *Self, entity: Entity, entry_id: u64, entry_size: usize, e
 
     const component_bit = @as(u128, 1) << shift;
 
-    const old_mask: u128 = self.masks.get(entity) orelse 0;
+    const old_mask: u128 = self.masks.at(entity) orelse 0;
     const new_mask = old_mask | component_bit;
-    try self.masks.set(entity, new_mask);
+    self.masks.items()[entity] = new_mask;
 
     if (!self.stores.contains(entry_id))
         try self.stores.put(entry_id, .initFromInfo(self.allocator, entry_id, entry_size));
@@ -195,8 +212,11 @@ pub fn getComponentConst(self: *Self, comptime T: type, entity: Entity) ?*const 
     return ptr;
 }
 
-fn removeComponent(self: *Self, entity: Entity, hash: u64) !void {
-    try self.cleanup_marks.components.set(entity, hash);
+fn removeComponent(self: *Self, entity: Entity, hash: u64) void {
+    if (!self.isEntityAlive(entity)) return;
+
+    const store = self.stores.getPtr(hash) orelse return;
+    store.remove(entity);
 }
 
 // Systems
@@ -260,8 +280,7 @@ fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque, enti
         const group_mask = system.bit_mask orelse continue;
         const hash_count = system.hashes.len;
 
-        const stores = memory[0..hash_count];
-        // const components = memory[hash_count .. hash_count * 2];
+        const stores: []*core.types.ByteSparseSet = @ptrCast(memory[0..hash_count]);
 
         // TODO:    cache this to avoid hashmap lookups
         //          when a new store gets added systems need to be refreshed :(
@@ -286,15 +305,17 @@ fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque, enti
 
         const entity_len = smallest_store.backlink.len();
         const size: usize = @max(1, @divFloor(entity_len, entity_groups));
-        const rem: usize = @rem(entity_len, entity_groups);
+        const rem: usize = entity_len - size * entity_groups;
 
         for (0..entity_groups) |group_index| {
-            const components = memory[(hash_count * (group_index + 1))..][0..hash_count];
-            const entities =
-                if (group_index != entity_groups - 1 or rem == 0)
-                    smallest_store.backlink.items()[size * group_index ..][0..size]
-                else
-                    smallest_store.backlink.items()[size * group_index ..][0..rem];
+            const comp_start = hash_count * (group_index + 1);
+            const comp_end = comp_start + hash_count;
+
+            const entities_start = size * group_index;
+            const entities_end = entities_start + if (group_index != entity_groups - 1 or rem == 0) size else rem;
+
+            const components = memory[comp_start..comp_end];
+            const entities = smallest_store.backlink.items()[entities_start..entities_end];
 
             pool.spawnWg(&wg, invokeBatch, .{ self, system, group_mask, entities, stores, components });
         }
@@ -303,30 +324,30 @@ fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque, enti
     }
 }
 
-inline fn invokeBatch(self: *Self, system: System, group_mask: u128, entities: []usize, stores: []*anyopaque, components: []*anyopaque) void {
+inline fn invokeBatch(self: *Self, system: System, group_mask: u128, entities: []usize, stores: []*core.types.ByteSparseSet, components: []*anyopaque) void {
     entities: for (entities) |entity| {
-        const entity_mask = self.masks.get(entity).?;
+        const entity_mask = self.masks.items()[entity];
         if ((group_mask & entity_mask) != group_mask) continue;
 
-        for (stores, 0..) |raw_ptr, index| {
-            const store = core.ptrCast(core.types.ByteSparseSet, raw_ptr);
-
-            const new_ptr = store.get(entity) orelse continue :entities;
-            components[index] = new_ptr;
+        for (stores, 0..) |store, index| {
+            components[index] = store.get(entity) orelse continue :entities;
         }
 
         system.invoke(components);
     }
 }
 
-fn removeSystem(self: *Self, stage: Stage, system: System) !void {
-    try self.cleanup_marks.systems.append(.init(stage, system.id));
+fn removeSystem(self: *Self, stage: Stage, system: System) void {
+    const stage_list = self.systems.getPtr(core.types.coerceTo(usize, stage).?) orelse return;
+    stage_list.removeSystem(system.id);
 }
 
 // Cleanup
 // --------------------------------------------------------------------------------------------------------
 
 pub fn applyCommandBuffer(self: *Self) !void {
+    defer self.command_buffer.reset();
+
     for (self.command_buffer.commands.items()) |cmd| switch (cmd) {
         .make_entity => |arr| {
             defer self.command_buffer.allocator.free(arr);
@@ -345,51 +366,8 @@ pub fn applyCommandBuffer(self: *Self) !void {
         },
         .add_system => |info| try self.addSystem(info.stage, info.system),
 
-        // TODO:    rework removes to actually remove and not fuck with the heap
-        .remove_entity => |entity| try self.removeEntity(entity),
-        .remove_component => |data| try self.removeComponent(data.entity, data.type_hash),
-        .remove_system => |info| try self.removeSystem(info.stage, info.system),
+        .remove_entity => |entity| self.removeEntity(entity),
+        .remove_component => |data| self.removeComponent(data.entity, data.type_hash),
+        .remove_system => |info| self.removeSystem(info.stage, info.system),
     };
-
-    self.runCleanup();
-}
-
-// TODO:    remove unnecessary allocations for removals, this can be merged into applyCommandBuffer
-fn runCleanup(self: *Self) void {
-    defer {
-        self.command_buffer.reset();
-        self.cleanup_marks.reset();
-    }
-
-    for (self.cleanup_marks.entities.items()) |entity| {
-        if (!self.isEntityAlive(entity)) continue;
-
-        const bits = self.masks.get(entity) orelse continue;
-        self.getComponentStoresByBits(bits, &self.cleanup_scratch_memory) catch continue;
-
-        for (self.cleanup_scratch_memory.items()) |mem| {
-            const store = core.ptrCast(core.types.ByteSparseSet, mem);
-            store.remove(entity);
-        }
-
-        self.available_entity_ids.append(entity) catch continue;
-    }
-
-    for (self.cleanup_marks.components.backlink.items(), 0..) |backlink, index| {
-        const store_hash = self.cleanup_marks.components.dense.items()[index];
-        const entity = self.cleanup_marks.components.sparse.get(backlink) orelse continue;
-
-        if (!self.isEntityAlive(entity)) continue;
-
-        const store = self.stores.getPtr(store_hash) orelse continue;
-        store.remove(entity);
-    }
-
-    for (self.cleanup_marks.systems.items()) |kv| {
-        const stage = core.types.coerceTo(usize, kv.key).?;
-        const target_system_id = kv.value;
-
-        const stage_list = self.systems.getPtr(stage) orelse continue;
-        stage_list.removeSystem(target_system_id);
-    }
 }

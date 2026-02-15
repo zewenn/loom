@@ -5,6 +5,8 @@ const core = @import("lm_core");
 const ecs = @import("lm_ecs");
 
 const simFor1MilEntities = struct {
+    pub var outer: usize = 0;
+
     const TestComponent = struct {
         inner: u64 = 0,
     };
@@ -14,6 +16,7 @@ const simFor1MilEntities = struct {
 
     fn testSystem(t_comp: *TestComponent) !void {
         t_comp.inner = 67;
+        outer += 1;
     }
 
     fn otherTestSystem(t_comp: *OtherTestComponent) !void {
@@ -37,10 +40,9 @@ const simFor1MilEntities = struct {
                 OtherTestComponent{},
             });
         }
-
         try world.command_buffer.addSystem(.init, testSystem);
         try world.command_buffer.addSystem(.init, otherTestSystem);
-        try world.applyCommandBuffer();
+        try world.runStage(.init);
     }
 
     pub fn deinit() void {
@@ -70,4 +72,6 @@ pub fn runBenchmarks() !void {
     defer simFor1MilEntities.deinit();
 
     try core.benchmarking.measure(simFor1MilEntities.run1MilStage, .{}, config);
+
+    try writer.print("\n{d}\n", .{simFor1MilEntities.outer});
 }
