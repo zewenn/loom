@@ -317,14 +317,14 @@ fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque, enti
             const components = memory[comp_start..comp_end];
             const entities = smallest_store.backlink.items()[entities_start..entities_end];
 
-            pool.spawnWg(&wg, invokeBatch, .{ self, system, group_mask, entities, stores, components });
+            pool.spawnWg(&wg, entityBatch, .{ self, system, group_mask, entities, stores, components });
         }
 
         wg.wait();
     }
 }
 
-inline fn invokeBatch(self: *Self, system: System, group_mask: u128, entities: []usize, stores: []*core.types.ByteSparseSet, components: []*anyopaque) void {
+inline fn entityBatch(self: *Self, system: System, group_mask: u128, entities: []usize, stores: []*core.types.ByteSparseSet, components: []*anyopaque) void {
     entities: for (entities) |entity| {
         const entity_mask = self.masks.items()[entity];
         if ((group_mask & entity_mask) != group_mask) continue;

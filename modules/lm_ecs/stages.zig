@@ -85,7 +85,7 @@ pub const StageInfo = struct {
             const write_mask = self.batch_write_masks.items()[batch_index];
             const read_mask = self.batch_read_masks.items()[batch_index];
 
-            if (system.overlapsMasks(write_mask, read_mask)) continue;
+            if (!system.overlapsMasks(write_mask, read_mask)) continue;
 
             try self.batches.items()[batch_index].append(system);
 
