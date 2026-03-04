@@ -12,8 +12,6 @@ const StageInfo = @import("stages.zig").StageInfo;
 
 const Self = @This();
 
-cleanup_marks: ecs.CleanupMarks,
-// systems: std.AutoHashMap(Stage, core.List(System)),
 systems: core.types.SparseSet(StageInfo),
 
 mutex: std.Thread.Mutex,
@@ -21,9 +19,6 @@ mutex: std.Thread.Mutex,
 available_entity_ids: core.List(usize),
 next_entity_index: usize = 0,
 
-// TODO:    change masks to no longer use a sparse set
-//          use a flat list instead to avoid pagedlists
-// masks: core.types.SparseSet(u128),
 masks: core.List(u128),
 type_bit_index_set: core.types.SparseSet(u64),
 next_component_bit_index: u7 = 0,
@@ -31,7 +26,6 @@ next_component_bit_index: u7 = 0,
 stores: std.AutoHashMap(u64, core.types.ByteSparseSet),
 
 system_batch_thread_pool: ?std.Thread.Pool,
-entity_thread_pool: ?std.Thread.Pool,
 run_stage_scratch_memory: core.List(*anyopaque),
 cleanup_scratch_memory: core.List(*anyopaque),
 
@@ -55,13 +49,10 @@ pub fn init(allocator: Allocator) Self {
         .mutex = .{},
 
         .system_batch_thread_pool = null,
-        .entity_thread_pool = null,
         .run_stage_scratch_memory = .init(allocator),
         .cleanup_scratch_memory = .init(allocator),
 
         .command_buffer = .init(allocator),
-
-        .cleanup_marks = .init(allocator),
     };
 }
 
@@ -82,7 +73,6 @@ pub fn deinit(self: *Self) void {
     self.available_entity_ids.deinit();
 
     if (self.system_batch_thread_pool) |*pool| pool.deinit();
-    if (self.entity_thread_pool) |*pool| pool.deinit();
     self.run_stage_scratch_memory.deinit();
     self.cleanup_scratch_memory.deinit();
 
@@ -128,6 +118,15 @@ inline fn assertValidEntityId(self: *Self, id: Entity) void {
     );
 }
 
+fn resizeBatchPool(self: *Self, to: usize) void {
+    if (self.system_batch_thread_pool) |*pool| pool.deinit();
+    self.system_batch_thread_pool = null;
+
+    var new_pool: std.Thread.Pool = undefined;
+    new_pool.init(.{ .allocator = self.allocator, .n_jobs = to }) catch return;
+
+    self.system_batch_thread_pool = new_pool;
+}
 // Entities
 // --------------------------------------------------------------------------------------------------------
 
@@ -139,11 +138,6 @@ pub fn newEntity(self: *Self) !Entity {
         defer self.next_entity_index += 1;
         break :get self.next_entity_index;
     };
-
-    try self.command_buffer.addComponent(new_id, ecs.Context{
-        .world = self,
-        .entity = new_id,
-    });
 
     if (self.masks.len() <= new_id) {
         try self.masks.resize(new_id + 1);
@@ -229,6 +223,8 @@ fn addSystem(self: *Self, stage: Stage, system: System) !void {
 
     const info = self.systems.getPtr(at) orelse return;
     try info.addSystem(system);
+
+    self.resizeBatchPool(info.batches.len());
 }
 
 pub fn runStage(self: *Self, stage: Stage) !void {
@@ -244,38 +240,34 @@ pub fn runStage(self: *Self, stage: Stage) !void {
     const batches = stage_info.batches;
     if (batches.len() == 0) return;
 
-    const entity_threads: usize = @max(1, @min(@divFloor(self.next_entity_index - 1, 8192), 16));
+    // TODO: change this to not use self.next_entity_index but calculate the batchs' entity count and use the largest
+    const batch_size: usize = stage_info.max_hash_count * (self.next_entity_index + 1);
+    try self.run_stage_scratch_memory.resize(batch_size * batches.len());
 
-    try self.run_stage_scratch_memory.resize(stage_info.max_hash_count * (entity_threads + 1) * batches.len());
     const memory = self.run_stage_scratch_memory.items();
 
     if (self.system_batch_thread_pool == null) {
-        self.system_batch_thread_pool = undefined;
-        try self.system_batch_thread_pool.?.init(.{ .allocator = self.allocator, .n_jobs = batches.len() });
+        self.resizeBatchPool(batches.len());
     }
+    const pool = if (self.system_batch_thread_pool) |*p| p else {
+        @branchHint(.cold);
+        std.log.err("pool wasn't initialised", .{});
+        return;
+    };
 
-    if (self.entity_thread_pool == null) {
-        self.entity_thread_pool = undefined;
-        try self.entity_thread_pool.?.init(.{
-            .allocator = self.allocator,
-            .n_jobs = batches.len() * entity_threads,
-        });
-    }
-
-    const pool = &(self.system_batch_thread_pool orelse return);
     var wg: std.Thread.WaitGroup = .{};
 
     for (batches.items(), 0..) |batch, index| {
-        const start = stage_info.max_hash_count * (entity_threads + 1) * index;
-        const end = stage_info.max_hash_count * (entity_threads + 1) * (index + 1);
+        const start = batch_size * index;
+        const end = batch_size * (index + 1);
 
-        pool.spawnWg(&wg, executeBatch, .{ self, batch.items(), memory[start..end], entity_threads });
+        pool.spawnWg(&wg, executeBatch, .{ self, batch.items(), memory[start..end] });
     }
 
     wg.wait();
 }
 
-fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque, entity_groups: usize) void {
+fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque) void {
     outer: for (systems) |system| {
         const group_mask = system.bit_mask orelse continue;
         const hash_count = system.hashes.len;
@@ -297,43 +289,18 @@ fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque, enti
             if (store.len() < smallest_store.len()) smallest_store = store;
         }
 
-        const pool = &(self.entity_thread_pool orelse {
-            std.log.err("entity pool does not exist", .{});
-            return;
-        });
-        var wg: std.Thread.WaitGroup = .{};
+        const entity_len = smallest_store.len();
+        const components = memory[hash_count .. hash_count * entity_len + 1];
 
-        const entity_len = smallest_store.backlink.len();
-        const size: usize = @max(1, @divFloor(entity_len, entity_groups));
-        const rem: usize = entity_len - size * entity_groups;
+        entities: for (smallest_store.backlink.items(), 0..) |entity, entity_index| {
+            const entity_mask = self.masks.items()[entity];
+            if ((group_mask & entity_mask) != group_mask) continue;
 
-        for (0..entity_groups) |group_index| {
-            const comp_start = hash_count * (group_index + 1);
-            const comp_end = comp_start + hash_count;
-
-            const entities_start = size * group_index;
-            const entities_end = entities_start + if (group_index != entity_groups - 1 or rem == 0) size else rem;
-
-            const components = memory[comp_start..comp_end];
-            const entities = smallest_store.backlink.items()[entities_start..entities_end];
-
-            pool.spawnWg(&wg, entityBatch, .{ self, system, group_mask, entities, stores, components });
+            for (stores, 0..) |store, store_index| {
+                components[entity_len * store_index + entity_index] = store.get(entity) orelse continue :entities;
+            }
         }
-
-        wg.wait();
-    }
-}
-
-inline fn entityBatch(self: *Self, system: System, group_mask: u128, entities: []usize, stores: []*core.types.ByteSparseSet, components: []*anyopaque) void {
-    entities: for (entities) |entity| {
-        const entity_mask = self.masks.items()[entity];
-        if ((group_mask & entity_mask) != group_mask) continue;
-
-        for (stores, 0..) |store, index| {
-            components[index] = store.get(entity) orelse continue :entities;
-        }
-
-        system.invoke(components);
+        system.invoke(smallest_store.len(), components);
     }
 }
 
@@ -346,13 +313,29 @@ fn removeSystem(self: *Self, stage: Stage, system: System) void {
 // --------------------------------------------------------------------------------------------------------
 
 pub fn applyCommandBuffer(self: *Self) !void {
-    defer self.command_buffer.reset();
+    defer {
+        for (self.command_buffer.commands.items()) |cmd| switch (cmd) {
+            .make_entity => |arr| self.command_buffer.allocator.free(arr),
+            else => {},
+        };
+        self.command_buffer.reset();
+    }
 
     for (self.command_buffer.commands.items()) |cmd| switch (cmd) {
         .make_entity => |arr| {
-            defer self.command_buffer.allocator.free(arr);
-
             const entity = try self.newEntity();
+
+            var context = ecs.Context{
+                .world = self,
+                .entity = entity,
+            };
+            try self.addComponent(
+                entity,
+                comptime core.type_erasure.typeToHash(ecs.Context),
+                core.type_erasure.alignedSize(ecs.Context),
+                &context,
+            );
+
             for (arr) |info| {
                 const start = info.data_offset;
                 const end = info.data_offset + info.data_size;

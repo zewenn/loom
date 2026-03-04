@@ -179,7 +179,7 @@ const sim1 = struct {
     }
 };
 
-const sim15SystemsFor1MilEntities = struct {
+const test_sim = struct {
     pub const TestComponent = struct {
         inner: u64 = 0,
     };
@@ -187,64 +187,9 @@ const sim15SystemsFor1MilEntities = struct {
         inner: u64 = 0,
     };
 
-    fn testSystem(t_comp: *TestComponent) !void {
-        t_comp.inner = 67;
-    }
-
-    fn testSystem2(t_comp: *TestComponent) !void {
-        t_comp.inner = 42;
-    }
-
-    fn testSystem3(t_comp: *TestComponent) !void {
-        t_comp.inner = 89;
-    }
-
-    fn testSystem4(t_comp: *TestComponent) !void {
-        t_comp.inner = 89;
-    }
-
-    fn testSystem5(t_comp: *TestComponent) !void {
-        t_comp.inner = 89;
-    }
-
-    fn otherTestSystem(t_comp: *OtherTestComponent) !void {
-        t_comp.inner = 42;
-    }
-
-    fn otherTestSystem2(t_comp: *OtherTestComponent) !void {
-        t_comp.inner = 42;
-    }
-
-    fn otherTestSystem3(t_comp: *OtherTestComponent) !void {
-        t_comp.inner = 42;
-    }
-
-    fn otherTestSystem4(t_comp: *OtherTestComponent) !void {
-        t_comp.inner = 42;
-    }
-
-    fn otherTestSystem5(t_comp: *OtherTestComponent) !void {
-        t_comp.inner = 42;
-    }
-
-    fn combinedSystem(t_comp: *TestComponent, t_comp2: *const OtherTestComponent) !void {
-        t_comp.inner = t_comp2.inner;
-    }
-
-    fn combinedSystem2(t_comp: *TestComponent, t_comp2: *const OtherTestComponent) !void {
-        t_comp.inner = t_comp2.inner * 42;
-    }
-
-    fn combinedSystem3(t_comp: *TestComponent, t_comp2: *const OtherTestComponent) !void {
-        t_comp.inner = t_comp2.inner * 67;
-    }
-
-    fn combinedSystem4(t_comp: *TestComponent, t_comp2: *const OtherTestComponent) !void {
-        t_comp.inner = t_comp2.inner * 7;
-    }
-
-    fn combinedSystem5(t_comp: *TestComponent, t_comp2: *const OtherTestComponent) !void {
-        t_comp.inner = t_comp2.inner * t_comp2.inner;
+    fn testSystem(t_comp: []*TestComponent) !void {
+        for (t_comp) |comp|
+            comp.inner = 67;
     }
 
     pub var world: ecs.World = undefined;
@@ -265,22 +210,6 @@ const sim15SystemsFor1MilEntities = struct {
             });
         }
         try world.command_buffer.addSystem(.init, testSystem);
-        try world.command_buffer.addSystem(.init, testSystem2);
-        try world.command_buffer.addSystem(.init, testSystem3);
-        try world.command_buffer.addSystem(.init, testSystem4);
-        try world.command_buffer.addSystem(.init, testSystem5);
-
-        try world.command_buffer.addSystem(.init, otherTestSystem);
-        try world.command_buffer.addSystem(.init, otherTestSystem2);
-        try world.command_buffer.addSystem(.init, otherTestSystem3);
-        try world.command_buffer.addSystem(.init, otherTestSystem4);
-        try world.command_buffer.addSystem(.init, otherTestSystem5);
-
-        try world.command_buffer.addSystem(.init, combinedSystem);
-        try world.command_buffer.addSystem(.init, combinedSystem2);
-        try world.command_buffer.addSystem(.init, combinedSystem3);
-        try world.command_buffer.addSystem(.init, combinedSystem4);
-        try world.command_buffer.addSystem(.init, combinedSystem5);
 
         try world.runStage(.init);
     }
@@ -309,15 +238,15 @@ pub fn runBenchmarks() !void {
 
     std.log.debug("asd", .{});
 
-    try sim1.init(std.heap.smp_allocator);
-    defer sim1.deinit();
+    try test_sim.init(std.heap.smp_allocator);
+    defer test_sim.deinit();
 
     std.log.debug("asd", .{});
 
     // try sim15SystemsFor1MilEntities.init(std.heap.smp_allocator);
     // defer sim15SystemsFor1MilEntities.deinit();
 
-    try core.benchmarking.measure(100, "Two million stage", sim1.run1MilStage, .{}, config);
+    try core.benchmarking.measure(100, "Two million stage", test_sim.runStage, .{}, config);
     // try core.benchmarking.measure(10_000, "One million + 15 system stage", sim15SystemsFor1MilEntities.runStage, .{}, config);
 
 }
