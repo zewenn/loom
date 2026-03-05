@@ -1,5 +1,3 @@
-// Inspired by: https://github.com/freakmangd/zentig_ecs/blob/main/src/etc/byte_array.zig#L65
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");

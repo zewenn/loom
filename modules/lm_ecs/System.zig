@@ -9,6 +9,7 @@ const Self = @This();
 const Fn = std.builtin.Type.Fn;
 const StructField = std.builtin.Type.StructField;
 const Param = Fn.Param;
+const GenericSystemFunction = *const fn (count: usize, data: [*][*]u8) anyerror!void;
 
 const HashQuery = struct {
     all: []const u64,
@@ -18,12 +19,7 @@ const HashQuery = struct {
 
 id: u64,
 name: []const u8,
-// TODO:    change systems to use bulk component arrays instead of single pointers
-//          fn signiture changes from fn ([]const *anyopaque) !void to
-//          fn ([]const []u8) !void probably
-//          system changes from fn (mycomp: *mut, other: *const c) !void to
-//          fn (mycomp: []*mut, other: []*const c) !void
-callback: *const fn (count: usize, []*anyopaque) anyerror!void,
+callback: GenericSystemFunction,
 hashes: []const u64,
 write_hashes: []const u64,
 read_hashes: []const u64,
@@ -64,12 +60,6 @@ pub fn hasMasks(self: Self) bool {
     return self.bit_mask != null and self.write_mask != null and self.read_mask != null;
 }
 
-pub fn invoke(self: Self, count: usize, ptrs: []*anyopaque) void {
-    self.callback(count, ptrs) catch |err| {
-        std.log.err("system invoke error: {any} @ {s}", .{ err, self.name });
-    };
-}
-
 inline fn canError(comptime func: anytype) bool {
     return switch (@typeInfo(@TypeOf(func))) {
         .@"fn" => |info| info.return_type == void,
@@ -84,17 +74,37 @@ inline fn getParams(comptime func: anytype) []const Param {
     };
 }
 
+/// Accepts []T, []*T, []const T, []*const T — returns the bare component type.
+inline fn componentTypeOf(comptime BASE: type) type {
+    const slice = switch (@typeInfo(BASE)) {
+        .pointer => |p| blk: {
+            core.comptimeAssert(p.size == .slice, "system param must be a slice");
+            break :blk p;
+        },
+        else => @compileError("system param must be a slice"),
+    };
+
+    return switch (@typeInfo(slice.child)) {
+        .pointer => |ptr| ptr.child, // []*T  or []*const T
+        else => slice.child, // []T   or []const T
+    };
+}
+
+/// Returns true for []const T or []*const T.
+inline fn isConstParam(comptime BASE: type) bool {
+    const slice = @typeInfo(BASE).pointer;
+    return switch (@typeInfo(slice.child)) {
+        .pointer => |ptr| ptr.is_const,
+        else => slice.is_const,
+    };
+}
+
 fn getTypes(comptime params: []const Param) []const type {
     var types: core.ComptimeList(type) = .init();
 
     inline for (params) |param| {
         const BASE = param.type orelse continue;
-        const T = switch (@typeInfo(BASE)) {
-            .pointer => |wrapping| wrapping.child,
-            else => @compileError("system param cannot be a non pointer type"),
-        };
-
-        types.append(T);
+        types.append(componentTypeOf(BASE));
     }
 
     return types.items();
@@ -109,24 +119,10 @@ fn getHashes(comptime func: anytype) HashQuery {
 
     inline for (params) |param| {
         const BASE = param.type orelse continue;
-        const ptr = switch (@typeInfo(BASE)) {
-            .pointer => |arr| blk: {
-                core.comptimeAssert(arr.size == .slice, "function param must be a slice");
-                break :blk switch (@typeInfo(arr.child)) {
-                    .pointer => |ptr| ptr,
-                    else => @compileError("system param cannot be a non pointer type"),
-                };
-            },
-            else => @compileError("system param cannot be a non array type"),
-        };
-        const hash = comptime core.type_erasure.typeToHash(ptr.child);
 
-        if (ptr.is_const)
-            read.append(hash)
-        else
-            write.append(hash);
-
+        const hash = comptime core.type_erasure.typeToHash(componentTypeOf(BASE));
         all.append(hash);
+        if (isConstParam(BASE)) read.append(hash) else write.append(hash);
     }
 
     return .{
@@ -136,19 +132,16 @@ fn getHashes(comptime func: anytype) HashQuery {
     };
 }
 
-pub fn wrapFunction(comptime func: anytype) *const fn (usize, []*anyopaque) anyerror!void {
+pub fn wrapFunction(comptime func: anytype) GenericSystemFunction {
     const local = struct {
-        pub fn wrapper(count: usize, args: []*anyopaque) !void {
+        pub fn wrapper(count: usize, slices: [*][*]u8) anyerror!void {
             const params = comptime getParams(func);
             const types = comptime getTypes(params);
 
             comptime var fields: core.ComptimeList(StructField) = .init();
-
             inline for (types, 0..) |T, index| {
-                const name = comptime std.fmt.comptimePrint("{d}", .{index});
-
                 comptime fields.append(StructField{
-                    .name = name,
+                    .name = std.fmt.comptimePrint("{d}", .{index}),
                     .type = []T,
                     .default_value_ptr = null,
                     .alignment = @alignOf([]T),
@@ -156,29 +149,21 @@ pub fn wrapFunction(comptime func: anytype) *const fn (usize, []*anyopaque) anye
                 });
             }
 
-            const Tuple: type = @Type(.{
-                .@"struct" = .{
-                    .is_tuple = true,
-                    .fields = fields.items(),
-                    .decls = &.{},
-                    .layout = .auto,
-                },
-            });
+            const Tuple: type = @Type(.{ .@"struct" = .{
+                .is_tuple = true,
+                .fields = fields.items(),
+                .decls = &.{},
+                .layout = .auto,
+            } });
 
-            // core.assertFmt(types.len == args.len, "args {d} didn't match expected type len {d}", .{ args.len, types.len });
             var result: Tuple = undefined;
-
             inline for (0..types.len) |index| {
                 const Target = types[index];
-                const begin = count * index;
-                const end = count * (index + 1);
-
-                result[index] = @as([]Target, @ptrCast(args[begin..end]));
+                result[index] = @as([*]Target, @ptrCast(@alignCast(slices[index])))[0..count];
             }
 
             try @call(.auto, func, result);
         }
     };
-
     return local.wrapper;
 }

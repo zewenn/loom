@@ -188,6 +188,7 @@ pub fn build(b: *std.Build) !void {
     const modules: []const []const u8 = &.{
         "lm_ecs",
     };
+    // TODO: rework benchmarking
 
     inline for (modules) |mod_name| {
         builder.link(b, &.{ loom_mod, test_module, bench_module }, mod_name, .{

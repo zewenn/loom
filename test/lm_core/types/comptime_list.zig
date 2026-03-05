@@ -153,7 +153,6 @@ test "ComptimeList: swapRemove" {
     comptime {
         var test_list = ComptimeList(u8).initWithItems(&.{ 1, 2, 3 });
 
-        // Intended behavior: last item (3) moves to index 0
         const removed = test_list.swapRemove(0);
 
         try expectEqualSlices(u8, &.{ 3, 2 }, test_list.items());
@@ -180,7 +179,6 @@ test "ComptimeList: resize and shrink" {
 
         test_list.resize(5);
         try expect(test_list.len() == 5);
-        // Elements 4 and 5 are 'undefined', but length is updated
 
         test_list.shrink(2);
         try expect(test_list.len() == 2);

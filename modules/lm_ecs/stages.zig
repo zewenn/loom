@@ -49,7 +49,7 @@ pub const StageInfo = struct {
         self.* = undefined;
     }
 
-    fn generateComponentMask(world: *ecs.World, hashes: []const u64) ?u128 {
+    pub fn generateComponentMask(world: *ecs.World, hashes: []const u64) ?u128 {
         var current_bitmask: u128 = 0b0;
 
         for (hashes) |hash| {
@@ -74,8 +74,6 @@ pub const StageInfo = struct {
             system.read_mask = generateComponentMask(world, system.read_hashes);
         }
 
-        if (!system.hasMasks()) return;
-
         if (self.max_hash_count < system.hashes.len) self.max_hash_count = system.hashes.len;
 
         try self.systems.append(system);
@@ -85,23 +83,22 @@ pub const StageInfo = struct {
             const write_mask = self.batch_write_masks.items()[batch_index];
             const read_mask = self.batch_read_masks.items()[batch_index];
 
-            if (!system.overlapsMasks(write_mask, read_mask)) continue;
+            if (system.hasMasks() and !system.overlapsMasks(write_mask, read_mask)) continue;
+            if (!system.hasMasks()) continue; // put unresolved in their own batch below
 
             try self.batches.items()[batch_index].append(system);
-
             self.batch_write_masks.items()[batch_index] |= system.write_mask.?;
             self.batch_read_masks.items()[batch_index] |= system.read_mask.?;
-
             return;
         }
 
         try self.batches.append(.init(self.allocator));
         errdefer _ = self.batches.pop();
 
-        try self.batch_write_masks.append(system.write_mask.?);
+        try self.batch_write_masks.append(system.write_mask orelse 0);
         errdefer _ = self.batch_write_masks.pop();
 
-        try self.batch_read_masks.append(system.read_mask.?);
+        try self.batch_read_masks.append(system.read_mask orelse 0);
         errdefer _ = self.batch_read_masks.pop();
 
         const new = &self.batches.items()[self.batches.len() - 1];

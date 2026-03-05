@@ -6,19 +6,4 @@ pub const Entity = usize;
 pub const CommandBuffer = @import("commands.zig").CommandBuffer;
 pub const Context = @import("Context.zig");
 
-// Plan:
-// const MyComponent = struct { ... };
-// const Player = world.newEntity(.{ MyComponent{}, SomethingElse{}, ElseElse{} });
-// fn mySystem(component1: *MyComponent, component2: *const SomethingElse, component3: *ElseElse) !void { ... }
-// world.useSystem([------------], mySystem);
-//                  .init
-//                  .load
-//                  .pre_update
-//                  .update
-//                  .post_update
-//                  .tick
-//                  .draw
-//                  .deinit
-
-// pub const build(w: *World) !void { ... }
-// lm_ecs.world("default", @import("default_world.zig"));
+pub const Archetype = @import("Archetype.zig");

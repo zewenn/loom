@@ -8,218 +8,310 @@ const System = ecs.System;
 const Stage = ecs.Stage;
 const Entity = ecs.Entity;
 const CommandBuffer = ecs.CommandBuffer;
+const Archetype = @import("Archetype.zig");
 const StageInfo = @import("stages.zig").StageInfo;
 
 const Self = @This();
 
+available_entity_ids: core.List(Entity),
+next_entity_index: usize,
+
+type_bit_index_set: core.types.SparseSet(u64),
+next_component_bit_index: u7,
+component_sizes: std.AutoHashMap(u64, usize),
+
+archetypes: core.List(Archetype),
+archetype_lookup: std.AutoHashMap(u128, usize),
+entity_to_archetype: core.types.PagedList(usize, 1024),
+
 systems: core.types.SparseSet(StageInfo),
 
+system_batch_thread_pool: ?*std.Thread.Pool,
+
 mutex: std.Thread.Mutex,
-
-available_entity_ids: core.List(usize),
-next_entity_index: usize = 0,
-
-masks: core.List(u128),
-type_bit_index_set: core.types.SparseSet(u64),
-next_component_bit_index: u7 = 0,
-
-stores: std.AutoHashMap(u64, core.types.ByteSparseSet),
-
-system_batch_thread_pool: ?std.Thread.Pool,
-run_stage_scratch_memory: core.List(*anyopaque),
-cleanup_scratch_memory: core.List(*anyopaque),
-
 command_buffer: CommandBuffer,
-
 allocator: Allocator,
 
 pub fn init(allocator: Allocator) Self {
-    return Self{
+    return .{
         .allocator = allocator,
-
-        .type_bit_index_set = .init(allocator),
-        .next_component_bit_index = 0,
-
-        .masks = .init(allocator),
-        .stores = .init(allocator),
-        .systems = .init(allocator),
 
         .available_entity_ids = .init(allocator),
         .next_entity_index = 0,
-        .mutex = .{},
 
+        .type_bit_index_set = .init(allocator),
+        .next_component_bit_index = 0,
+        .component_sizes = .init(allocator),
+
+        .archetypes = .init(allocator),
+        .archetype_lookup = .init(allocator),
+        .entity_to_archetype = .init(allocator),
+
+        .systems = .init(allocator),
         .system_batch_thread_pool = null,
-        .run_stage_scratch_memory = .init(allocator),
-        .cleanup_scratch_memory = .init(allocator),
 
+        .mutex = .{},
         .command_buffer = .init(allocator),
     };
 }
 
 pub fn deinit(self: *Self) void {
-    var stores_iterator = self.stores.valueIterator();
-    while (stores_iterator.next()) |set| {
-        set.deinit();
-    }
-    self.stores.deinit();
+    for (self.archetypes.items()) |*arch| arch.deinit();
+    self.archetypes.deinit();
+    self.archetype_lookup.deinit();
+    self.entity_to_archetype.deinit();
 
-    for (self.systems.dense.items()) |*info| {
-        info.deinit();
-    }
+    for (self.systems.dense.items()) |*info| info.deinit();
     self.systems.deinit();
 
-    self.masks.deinit();
     self.type_bit_index_set.deinit();
+    self.component_sizes.deinit();
     self.available_entity_ids.deinit();
 
-    if (self.system_batch_thread_pool) |*pool| pool.deinit();
-    self.run_stage_scratch_memory.deinit();
-    self.cleanup_scratch_memory.deinit();
+    if (self.system_batch_thread_pool) |pool| {
+        pool.deinit();
+        self.allocator.destroy(pool);
+    }
 
     self.command_buffer.deinit();
 
     self.* = undefined;
 }
 
-// Utils
-// --------------------------------------------------------------------------------------------------------
+fn newEntity(self: *Self) !Entity {
+    self.mutex.lock();
+    defer self.mutex.unlock();
 
-inline fn getComponentStore(self: *Self, comptime T: type) ?*core.types.ByteSparseSet {
-    return self.stores.getPtr(comptime core.type_erasure.typeToHash(T));
-}
+    const id = self.available_entity_ids.pop() orelse blk: {
+        defer self.next_entity_index += 1;
+        break :blk self.next_entity_index;
+    };
 
-fn getComponentStoresByBits(self: *Self, bits: u128, buffer: *core.List(*anyopaque)) !void {
-    buffer.shrinkRetainingCapacity(0);
-    try buffer.ensureTotalCapacity(128);
-
-    var index: u7 = 0;
-    while (index < @min(127, self.next_component_bit_index)) : (index += 1) {
-        const base_mask: u128 = 0b1;
-        const shifted = base_mask << @intCast(index);
-
-        if (shifted & bits == 0) continue;
-
-        const hash = self.type_bit_index_set.get(index) orelse return error.HashNotFound;
-        const store_ptr = self.stores.getPtr(hash) orelse return error.StoreNotFound;
-
-        try buffer.append(store_ptr);
-    }
+    return id;
 }
 
 pub inline fn isEntityAlive(self: *Self, entity: Entity) bool {
-    return entity < self.next_entity_index and !self.available_entity_ids.contains(entity);
+    return entity < self.next_entity_index and
+        !self.available_entity_ids.contains(entity);
 }
 
-inline fn assertValidEntityId(self: *Self, id: Entity) void {
-    core.assertFmt(
-        self.isEntityAlive(id),
-        "{d} was outside of created entities",
-        .{id},
-    );
-}
-
-fn resizeBatchPool(self: *Self, to: usize) void {
-    if (self.system_batch_thread_pool) |*pool| pool.deinit();
-    self.system_batch_thread_pool = null;
-
-    var new_pool: std.Thread.Pool = undefined;
-    new_pool.init(.{ .allocator = self.allocator, .n_jobs = to }) catch return;
-
-    self.system_batch_thread_pool = new_pool;
-}
-// Entities
-// --------------------------------------------------------------------------------------------------------
-
-pub fn newEntity(self: *Self) !Entity {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
-    const new_id = self.available_entity_ids.pop() orelse get: {
-        defer self.next_entity_index += 1;
-        break :get self.next_entity_index;
-    };
-
-    if (self.masks.len() <= new_id) {
-        try self.masks.resize(new_id + 1);
-    }
-    self.masks.items()[new_id] = 0;
-
-    return new_id;
-}
-
-fn removeEntity(self: *Self, entity: Entity) void {
-    if (!self.isEntityAlive(entity)) return;
-
-    const bits = self.masks.at(entity) orelse return;
-    self.getComponentStoresByBits(bits, &self.cleanup_scratch_memory) catch return;
-
-    for (self.cleanup_scratch_memory.items()) |mem| {
-        const store = core.ptrCast(core.types.ByteSparseSet, mem);
-        store.remove(entity);
-    }
-
-    self.available_entity_ids.append(entity) catch return;
-}
-
-// Components
-// --------------------------------------------------------------------------------------------------------
-
-fn addComponent(self: *Self, entity: Entity, entry_id: u64, entry_size: usize, entry: *const anyopaque) !void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-
-    self.assertValidEntityId(entity);
-
-    if (!self.type_bit_index_set.containsValue(entry_id)) {
-        try self.type_bit_index_set.set(self.next_component_bit_index, entry_id);
-        self.next_component_bit_index += 1;
-    }
-
-    const bit_index = self.type_bit_index_set.getKeyByValue(entry_id).?;
-    const shift = core.coerceTo(u7, bit_index).?;
-
-    const component_bit = @as(u128, 1) << shift;
-
-    const old_mask: u128 = self.masks.at(entity) orelse 0;
-    const new_mask = old_mask | component_bit;
-    self.masks.items()[entity] = new_mask;
-
-    if (!self.stores.contains(entry_id))
-        try self.stores.put(entry_id, .initFromInfo(self.allocator, entry_id, entry_size));
-
-    const store = self.stores.getPtr(entry_id).?;
-    try store.setWithInfo(entity, entry_id, entry_size, entry);
+pub fn entityCount(self: *Self) usize {
+    return self.next_entity_index - self.available_entity_ids.len();
 }
 
 pub fn getComponent(self: *Self, comptime T: type, entity: Entity) ?*T {
     if (!self.isEntityAlive(entity)) return null;
-
-    const store = self.getComponentStore(T) orelse return null;
-    return store.getAs(entity, T);
+    const arch_index = self.entity_to_archetype.get(entity) orelse return null;
+    return self.archetypes.items()[arch_index].getComponentAs(T, entity);
 }
 
 pub fn getComponentConst(self: *Self, comptime T: type, entity: Entity) ?*const T {
-    if (!self.isEntityAlive(entity)) return null;
-
-    const store = self.getComponentStore(T) orelse return null;
-    const ptr = store.getAs(entity, T) orelse return null;
-    return ptr;
+    return self.getComponent(T, entity);
 }
 
-fn removeComponent(self: *Self, entity: Entity, hash: u64) void {
+/// Ensure `hash` is registered and return its component bit.
+fn registerComponentType(self: *Self, hash: u64, size: usize) !u128 {
+    if (!self.type_bit_index_set.containsValue(hash)) {
+        try self.type_bit_index_set.set(self.next_component_bit_index, hash);
+        try self.component_sizes.put(hash, size);
+        self.next_component_bit_index += 1;
+    }
+    const bit_index = self.type_bit_index_set.getKeyByValue(hash).?;
+    return @as(u128, 1) << @intCast(bit_index);
+}
+
+/// Return the component bit for an already-registered hash, or null.
+inline fn componentBit(self: *Self, hash: u64) ?u128 {
+    const bit_index = self.type_bit_index_set.getKeyByValue(hash) orelse return null;
+    return @as(u128, 1) << @intCast(bit_index);
+}
+
+/// Return the index of the archetype with this exact mask, creating it if needed.
+/// May append to `self.archetypes`; any *Archetype pointers obtained before
+/// this call must be re-derived from indices after it returns.
+fn findOrCreateArchetype(self: *Self, mask: u128) !usize {
+    if (self.archetype_lookup.get(mask)) |idx| return idx;
+
+    var hashes = core.List(u64).init(self.allocator);
+    defer hashes.deinit();
+    var sizes = core.List(usize).init(self.allocator);
+    defer sizes.deinit();
+
+    var bit: u7 = 0;
+    while (bit < self.next_component_bit_index) : (bit += 1) {
+        const shifted: u128 = @as(u128, 1) << bit;
+        if (mask & shifted == 0) continue;
+
+        const hash = self.type_bit_index_set.get(bit) orelse return error.UnknownComponentType;
+        const size = self.component_sizes.get(hash) orelse return error.UnknownComponentSize;
+        try hashes.append(hash);
+        try sizes.append(size);
+    }
+
+    const index = self.archetypes.len();
+    const new_arch = try Archetype.init(self.allocator, mask, hashes.items(), sizes.items());
+    try self.archetypes.append(new_arch);
+    errdefer {
+        var a = self.archetypes.pop().?;
+        a.deinit();
+    }
+
+    try self.archetype_lookup.put(mask, index);
+
+    return index;
+}
+
+/// A (hash, size, opaque-data-pointer) triple used by insertEntityDirect.
+const ComponentEntry = struct {
+    hash: u64,
+    size: usize,
+    data: *const anyopaque,
+};
+
+/// Insert a brand-new entity into its final archetype in a single step.
+///
+/// This is the hot path for make_entity: instead of migrating through N
+/// intermediate archetypes (one per addComponent call), we register all
+/// component types, compute the final mask, find-or-create the target
+/// archetype once, then call arch.addEntity with all data pointers arranged
+/// in column order.  N archetype migrations → 1.
+fn insertEntityDirect(self: *Self, entity: Entity, components: []const ComponentEntry) !void {
+    var final_mask: u128 = 0;
+    for (components) |c| {
+        final_mask |= try self.registerComponentType(c.hash, c.size);
+    }
+
+    const arch_idx = try self.findOrCreateArchetype(final_mask);
+
+    var ptrs: [128]*const anyopaque = undefined;
+    var n: usize = 0;
+
+    var bit: u7 = 0;
+    while (bit < self.next_component_bit_index) : (bit += 1) {
+        const shifted: u128 = @as(u128, 1) << bit;
+        if (final_mask & shifted == 0) continue;
+
+        const hash = self.type_bit_index_set.get(bit) orelse return error.UnknownComponentType;
+
+        const ptr = for (components) |c| {
+            if (c.hash == hash) break c.data;
+        } else return error.MissingComponentData;
+
+        ptrs[n] = ptr;
+        n += 1;
+    }
+
+    try self.archetypes.items()[arch_idx].addEntity(entity, ptrs[0..n]);
+    try self.entity_to_archetype.set(entity, arch_idx);
+}
+
+/// Add or overwrite a single component on an entity.
+/// Moves the entity to a new archetype when its mask changes.
+fn addComponent(
+    self: *Self,
+    entity: Entity,
+    hash: u64,
+    size: usize,
+    data: *const anyopaque,
+) !void {
+    const component_bit = try self.registerComponentType(hash, size);
+
+    const old_arch_index = self.entity_to_archetype.get(entity);
+    const old_mask: u128 = if (old_arch_index) |idx|
+        self.archetypes.items()[idx].mask
+    else
+        0;
+
+    if (old_mask & component_bit != 0) {
+        self.archetypes.items()[old_arch_index.?].setComponent(entity, hash, data);
+        return;
+    }
+
+    const new_mask = old_mask | component_bit;
+
+    const dst_idx = try self.findOrCreateArchetype(new_mask);
+
+    if (old_arch_index) |src_idx| {
+        try self.archetypes.items()[dst_idx].moveEntityFrom(
+            entity,
+            &self.archetypes.items()[src_idx],
+            &.{.{ .hash = hash, .data = data }},
+        );
+        _ = self.archetypes.items()[src_idx].removeEntity(entity);
+    } else {
+        try self.archetypes.items()[dst_idx].addEntity(entity, &.{data});
+    }
+
+    try self.entity_to_archetype.set(entity, dst_idx);
+}
+
+/// Remove a single component from an entity.
+/// Moves the entity to the subset archetype; if the entity ends up with no
+/// components it is simply removed from its current archetype.
+fn removeComponent(self: *Self, entity: Entity, hash: u64) !void {
+    const arch_index = self.entity_to_archetype.get(entity) orelse return;
+    const bit = self.componentBit(hash) orelse return;
+
+    const old_mask = self.archetypes.items()[arch_index].mask;
+    if (old_mask & bit == 0) return; // entity doesn't have this component
+
+    const new_mask = old_mask & ~bit;
+
+    if (new_mask == 0) {
+        _ = self.archetypes.items()[arch_index].removeEntity(entity);
+        self.entity_to_archetype.removeFast(entity);
+        return;
+    }
+
+    const dst_idx = try self.findOrCreateArchetype(new_mask);
+    const src_idx = arch_index;
+
+    try self.archetypes.items()[dst_idx].moveEntityFrom(
+        entity,
+        &self.archetypes.items()[src_idx],
+        &.{}, // no new components needed — we are only removing one
+    );
+    _ = self.archetypes.items()[src_idx].removeEntity(entity);
+
+    try self.entity_to_archetype.set(entity, dst_idx);
+}
+
+/// Destroy an entity: remove it from its archetype and return its ID to the pool.
+fn removeEntity(self: *Self, entity: Entity) void {
     if (!self.isEntityAlive(entity)) return;
 
-    const store = self.stores.getPtr(hash) orelse return;
-    store.remove(entity);
+    if (self.entity_to_archetype.get(entity)) |arch_index| {
+        _ = self.archetypes.items()[arch_index].removeEntity(entity);
+        self.entity_to_archetype.removeFast(entity);
+    }
+
+    self.available_entity_ids.append(entity) catch {};
 }
 
-// Systems
-// --------------------------------------------------------------------------------------------------------
+fn resizeBatchPool(self: *Self, batch_count: usize) void {
+    if (self.system_batch_thread_pool) |pool| {
+        pool.deinit();
+        self.allocator.destroy(pool);
+    }
+    self.system_batch_thread_pool = null;
+
+    const pool = self.allocator.create(std.Thread.Pool) catch return;
+    pool.init(.{
+        .allocator = self.allocator,
+        .n_jobs = batch_count,
+    }) catch {
+        self.allocator.destroy(pool);
+        return;
+    };
+
+    self.system_batch_thread_pool = pool;
+}
 
 fn addSystem(self: *Self, stage: Stage, system: System) !void {
     const at = core.types.coerceTo(usize, stage).?;
+
     if (!self.systems.contains(at))
-        try self.systems.set(at, .init(self.allocator, self));
+        try self.systems.set(at, StageInfo.init(self.allocator, self));
 
     const info = self.systems.getPtr(at) orelse return;
     try info.addSystem(system);
@@ -227,130 +319,124 @@ fn addSystem(self: *Self, stage: Stage, system: System) !void {
     self.resizeBatchPool(info.batches.len());
 }
 
+fn removeSystem(self: *Self, stage: Stage, system: System) void {
+    const at = core.types.coerceTo(usize, stage).?;
+    const info = self.systems.getPtr(at) orelse return;
+    info.removeSystem(system.id);
+}
+
 pub fn runStage(self: *Self, stage: Stage) !void {
     self.mutex.lock();
     defer {
         self.mutex.unlock();
-        self.applyCommandBuffer() catch |err| {
-            std.log.err("command buffer could not be applied: {any}", .{err});
-        };
+        self.flushCommandBuffer() catch |err|
+            std.log.err("applyCommandBuffer failed: {any}", .{err});
     }
 
-    const stage_info = self.systems.getPtr(core.types.coerceTo(usize, stage).?) orelse return;
-    const batches = stage_info.batches;
-    if (batches.len() == 0) return;
+    const at = core.types.coerceTo(usize, stage).?;
+    const stage_info = self.systems.getPtr(at) orelse return;
+    if (stage_info.batches.len() == 0) return;
 
-    // TODO: change this to not use self.next_entity_index but calculate the batchs' entity count and use the largest
-    const batch_size: usize = stage_info.max_hash_count * (self.next_entity_index + 1);
-    try self.run_stage_scratch_memory.resize(batch_size * batches.len());
+    if (self.system_batch_thread_pool == null)
+        self.resizeBatchPool(stage_info.batches.len());
 
-    const memory = self.run_stage_scratch_memory.items();
-
-    if (self.system_batch_thread_pool == null) {
-        self.resizeBatchPool(batches.len());
-    }
-    const pool = if (self.system_batch_thread_pool) |*p| p else {
+    const pool = if (self.system_batch_thread_pool) |p| p else {
         @branchHint(.cold);
-        std.log.err("pool wasn't initialised", .{});
+        std.log.err("thread pool failed to initialise", .{});
         return;
     };
 
     var wg: std.Thread.WaitGroup = .{};
 
-    for (batches.items(), 0..) |batch, index| {
-        const start = batch_size * index;
-        const end = batch_size * (index + 1);
-
-        pool.spawnWg(&wg, executeBatch, .{ self, batch.items(), memory[start..end] });
+    for (stage_info.batches.items()) |batch| {
+        pool.spawnWg(&wg, executeBatch, .{ self, batch.items() });
     }
 
     wg.wait();
 }
 
-fn executeBatch(self: *Self, systems: []const System, memory: []*anyopaque) void {
-    outer: for (systems) |system| {
-        const group_mask = system.bit_mask orelse continue;
-        const hash_count = system.hashes.len;
+/// Called from the thread pool — one invocation per batch.
+/// Systems within a batch are sequential; batches run in parallel.
+///
+/// The key difference from the sparse-set world: instead of scatter-gathering
+/// individual entity pointers we pass each matching archetype's dense column
+/// buffers directly to the system callback.  The inner loop is just a mask
+/// test and a handful of pointer reads.
+fn executeBatch(self: *Self, systems: []const System) void {
+    var col_ptrs: [128][*]u8 = undefined;
 
-        const stores: []*core.types.ByteSparseSet = @ptrCast(memory[0..hash_count]);
-
-        // TODO:    cache this to avoid hashmap lookups
-        //          when a new store gets added systems need to be refreshed :(
-        var smallest_store: *core.types.ByteSparseSet = undefined;
-        for (system.hashes, 0..) |hash, index| {
-            const store = self.stores.getPtr(hash) orelse continue :outer;
-            stores[index] = store;
-
-            if (index == 0) {
-                smallest_store = store;
-                continue;
-            }
-
-            if (store.len() < smallest_store.len()) smallest_store = store;
+    for (systems) |system| {
+        var resolved = system;
+        if (!resolved.hasMasks()) {
+            resolved.bit_mask = StageInfo.generateComponentMask(self, resolved.hashes);
+            resolved.write_mask = StageInfo.generateComponentMask(self, resolved.write_hashes);
+            resolved.read_mask = StageInfo.generateComponentMask(self, resolved.read_hashes);
         }
+        if (!resolved.hasMasks()) continue;
 
-        const entity_len = smallest_store.len();
-        const components = memory[hash_count .. hash_count * entity_len + 1];
+        const group_mask = resolved.bit_mask orelse continue;
+        const n_hashes = resolved.hashes.len;
 
-        entities: for (smallest_store.backlink.items(), 0..) |entity, entity_index| {
-            const entity_mask = self.masks.items()[entity];
-            if ((group_mask & entity_mask) != group_mask) continue;
+        for (self.archetypes.items()) |*arch| {
+            if (arch.isEmpty()) continue;
+            if (!arch.matchesMask(group_mask)) continue;
 
-            for (stores, 0..) |store, store_index| {
-                components[entity_len * store_index + entity_index] = store.get(entity) orelse continue :entities;
-            }
+            if (!arch.fillColumnPtrs(resolved.hashes, col_ptrs[0..n_hashes])) continue;
+
+            resolved.callback(arch.len(), &col_ptrs) catch |err|
+                std.log.err("system '{s}' failed: {any}", .{ resolved.name, err });
         }
-        system.invoke(smallest_store.len(), components);
     }
 }
 
-fn removeSystem(self: *Self, stage: Stage, system: System) void {
-    const stage_list = self.systems.getPtr(core.types.coerceTo(usize, stage).?) orelse return;
-    stage_list.removeSystem(system.id);
-}
-
-// Cleanup
-// --------------------------------------------------------------------------------------------------------
-
-pub fn applyCommandBuffer(self: *Self) !void {
+pub fn flushCommandBuffer(self: *Self) !void {
     defer {
-        for (self.command_buffer.commands.items()) |cmd| switch (cmd) {
-            .make_entity => |arr| self.command_buffer.allocator.free(arr),
-            else => {},
-        };
+        for (self.command_buffer.commands.items()) |cmd| {
+            switch (cmd) {
+                .make_entity => |arr| self.command_buffer.allocator.free(arr),
+                else => {},
+            }
+        }
         self.command_buffer.reset();
     }
 
-    for (self.command_buffer.commands.items()) |cmd| switch (cmd) {
-        .make_entity => |arr| {
-            const entity = try self.newEntity();
+    for (self.command_buffer.commands.items()) |cmd| {
+        switch (cmd) {
+            .make_entity => |descriptors| {
+                const entity = try self.newEntity();
 
-            var context = ecs.Context{
-                .world = self,
-                .entity = entity,
-            };
-            try self.addComponent(
-                entity,
-                comptime core.type_erasure.typeToHash(ecs.Context),
-                core.type_erasure.alignedSize(ecs.Context),
-                &context,
-            );
+                var entries: [129]ComponentEntry = undefined;
+                var ctx = ecs.Context{ .world = self, .entity = entity };
+                entries[0] = .{
+                    .hash = comptime core.type_erasure.typeToHash(ecs.Context),
+                    .size = core.type_erasure.alignedSize(ecs.Context),
+                    .data = &ctx,
+                };
 
-            for (arr) |info| {
+                for (descriptors, 1..) |desc, i| {
+                    entries[i] = .{
+                        .hash = desc.type_hash,
+                        .size = desc.data_size,
+                        .data = self.command_buffer.data.items()[desc.data_offset..].ptr,
+                    };
+                }
+
+                try self.insertEntityDirect(entity, entries[0 .. descriptors.len + 1]);
+            },
+            .add_component => |info| {
                 const start = info.data_offset;
                 const end = info.data_offset + info.data_size;
-                try self.addComponent(entity, info.type_hash, info.data_size, self.command_buffer.data.items()[start..end].ptr);
-            }
-        },
-        .add_component => |info| {
-            const start = info.data_offset;
-            const end = info.data_offset + info.data_size;
-            try self.addComponent(info.entity, info.type_hash, info.data_size, self.command_buffer.data.items()[start..end].ptr);
-        },
-        .add_system => |info| try self.addSystem(info.stage, info.system),
-
-        .remove_entity => |entity| self.removeEntity(entity),
-        .remove_component => |data| self.removeComponent(data.entity, data.type_hash),
-        .remove_system => |info| self.removeSystem(info.stage, info.system),
-    };
+                try self.addComponent(
+                    info.entity,
+                    info.type_hash,
+                    info.data_size,
+                    self.command_buffer.data.items()[start..end].ptr,
+                );
+            },
+            .add_system => |info| try self.addSystem(info.stage, info.system),
+            .remove_entity => |entity| self.removeEntity(entity),
+            .remove_component => |data| try self.removeComponent(data.entity, data.type_hash),
+            .remove_system => |info| self.removeSystem(info.stage, info.system),
+        }
+    }
 }
