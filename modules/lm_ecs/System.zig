@@ -7,7 +7,7 @@ const World = @import("World.zig");
 const Self = @This();
 
 const Fn = std.builtin.Type.Fn;
-const StructField = std.builtin.Type.StructField;
+
 const Param = Fn.Param;
 const GenericSystemFunction = *const fn (count: usize, data: [*][*]u8) anyerror!void;
 
@@ -138,23 +138,11 @@ pub fn wrapFunction(comptime func: anytype) GenericSystemFunction {
             const params = comptime getParams(func);
             const types = comptime getTypes(params);
 
-            comptime var fields: core.ComptimeList(StructField) = .init();
+            comptime var slice_types: [types.len]type = undefined;
             inline for (types, 0..) |T, index| {
-                comptime fields.append(StructField{
-                    .name = std.fmt.comptimePrint("{d}", .{index}),
-                    .type = []T,
-                    .default_value_ptr = null,
-                    .alignment = @alignOf([]T),
-                    .is_comptime = false,
-                });
+                slice_types[index] = []T;
             }
-
-            const Tuple: type = @Type(.{ .@"struct" = .{
-                .is_tuple = true,
-                .fields = fields.items(),
-                .decls = &.{},
-                .layout = .auto,
-            } });
+            const Tuple = std.meta.Tuple(&slice_types);
 
             var result: Tuple = undefined;
             inline for (0..types.len) |index| {

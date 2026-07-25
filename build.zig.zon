@@ -2,21 +2,16 @@
     .name = .loom,
     .version = "0.9.1",
     .fingerprint = 0xc2597137c472d6ae, // Changing this has security and trust implications.
-
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
 
     .dependencies = .{
         .raylib_zig = .{
-            .url = "git+https://github.com/raylib-zig/raylib-zig?ref=devel#163b1ef2e993fe7cc7c76bb3213d98612f4b7676",
-            .hash = "raylib_zig-5.6.0-dev-KE8REGNJBQDSjjyCmf4ATVQtk_OaBpY0B7kBxwSOPEGZ",
-        },
-        .uuid = .{
-            .url = "https://github.com/r4gus/uuid-zig/archive/refs/tags/0.4.0.tar.gz",
-            .hash = "uuid-0.4.0-oOieIR2AAAChAUVBY4ABjYI1XN0EbVALmiN0JIlggC3i",
+            .url = "git+https://github.com/raylib-zig/raylib-zig?ref=devel#97be2c7ae646a2f09856604b138c427c0af1b952",
+            .hash = "raylib_zig-6.0.0-KE8REDJ4BQBu7lKwYNt6R4j5ywPeS37zqW6zrtjCcRwH",
         },
         .zclay = .{
-            .url = "git+https://github.com/johan0A/clay-zig-bindings#d594f9c8c745bec64394f7f6e5ff061134d7af9b",
-            .hash = "zclay-0.2.2-Ej1rkOzRAADy3oyFJ0I3aIJp38Kwsv9DMa0XWt84dRVW",
+            .url = "git+https://github.com/johan0A/clay-zig-bindings#e0286c488a303b93501944ccde10730cc74ecd58",
+            .hash = "zclay-0.2.2-Ej1rkP3RAACYZGzQB5NGPaqfySgKfO26NYk5Ja6Z15gC",
         },
         .system_sdk = .{
             .url = "git+https://github.com/zig-gamedev/system_sdk#777e76828f05d5d223df47a4c0de95ae4efde884",

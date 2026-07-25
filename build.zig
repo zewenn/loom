@@ -62,10 +62,6 @@ const builder = struct {
         const zclay_dep = b.dependency("zclay", .{ .target = target, .optimize = optimize });
         const zclay = zclay_dep.module("zclay");
 
-        const uuid_dep = b.dependency("uuid", .{ .target = target, .optimize = optimize });
-        const uuid = uuid_dep.module("uuid");
-
-        mod.addImport("uuid", uuid);
 
         if (options.dependency_options.link_clay) {
             mod.addImport("clay", zclay);
@@ -116,21 +112,21 @@ const builder = struct {
                     raylib.linkSystemLibrary("Xrandr", .{ .needed = true });
                     raylib.linkSystemLibrary("Xrender", .{ .needed = true });
 
-                    raylib_artifact.addLibraryPath(system_sdk.path("linux/lib/x86_64-linux-gnu"));
-                    raylib_artifact.addSystemIncludePath(system_sdk.path("linux/include"));
+                    raylib_artifact.root_module.addLibraryPath(system_sdk.path("linux/lib/x86_64-linux-gnu"));
+                    raylib_artifact.root_module.addSystemIncludePath(system_sdk.path("linux/include"));
 
-                    raylib_artifact.addLibraryPath(.{ .cwd_relative = "/usr/bin" });
-                    raylib_artifact.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
-                    raylib_artifact.addSystemIncludePath(.{ .cwd_relative = "/usr/include/X11" });
+                    raylib_artifact.root_module.addLibraryPath(.{ .cwd_relative = "/usr/bin" });
+                    raylib_artifact.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
+                    raylib_artifact.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/X11" });
 
-                    raylib_artifact.linkSystemLibrary("GLX");
-                    raylib_artifact.linkSystemLibrary("X11");
-                    raylib_artifact.linkSystemLibrary("Xcursor");
-                    raylib_artifact.linkSystemLibrary("Xext");
-                    raylib_artifact.linkSystemLibrary("Xi");
-                    raylib_artifact.linkSystemLibrary("Xinerama");
-                    raylib_artifact.linkSystemLibrary("Xrandr");
-                    raylib_artifact.linkSystemLibrary("Xrender");
+                    raylib_artifact.root_module.linkSystemLibrary("GLX", .{});
+                    raylib_artifact.root_module.linkSystemLibrary("X11", .{});
+                    raylib_artifact.root_module.linkSystemLibrary("Xcursor", .{});
+                    raylib_artifact.root_module.linkSystemLibrary("Xext", .{});
+                    raylib_artifact.root_module.linkSystemLibrary("Xi", .{});
+                    raylib_artifact.root_module.linkSystemLibrary("Xinerama", .{});
+                    raylib_artifact.root_module.linkSystemLibrary("Xrandr", .{});
+                    raylib_artifact.root_module.linkSystemLibrary("Xrender", .{});
                 } else if (target.result.cpu.arch == .aarch64) {
                     mod.addLibraryPath(system_sdk.path("linux/lib/aarch64-linux-gnu"));
                 }
@@ -187,6 +183,7 @@ pub fn build(b: *std.Build) !void {
 
     const modules: []const []const u8 = &.{
         "lm_ecs",
+        "lm_uuid",
     };
     // TODO: rework benchmarking
 

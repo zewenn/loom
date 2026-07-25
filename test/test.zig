@@ -4,7 +4,7 @@ const std = @import("std");
 const testing = std.testing;
 
 test {
-    testing.refAllDeclsRecursive(lm);
+    testing.refAllDecls(lm);
 
     _ = @import("lm_core/test.zig");
     _ = @import("lm_ecs/test.zig");
