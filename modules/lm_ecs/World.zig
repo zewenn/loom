@@ -11,6 +11,18 @@ const CommandBuffer = ecs.CommandBuffer;
 const Archetype = @import("Archetype.zig");
 const StageInfo = @import("stages.zig").StageInfo;
 
+const Mutex = struct {
+    impl: std.Io.Mutex = .init,
+
+    pub fn lock(self: *Mutex) void {
+        std.Io.Threaded.mutexLock(&self.impl);
+    }
+
+    pub fn unlock(self: *Mutex) void {
+        std.Io.Threaded.mutexUnlock(&self.impl);
+    }
+};
+
 const Self = @This();
 
 available_entity_ids: core.List(Entity),
@@ -26,9 +38,7 @@ entity_to_archetype: core.types.PagedList(usize, 1024),
 
 systems: core.types.SparseSet(StageInfo),
 
-system_batch_thread_pool: ?*std.Thread.Pool,
-
-mutex: std.Thread.Mutex,
+mutex: Mutex,
 command_buffer: CommandBuffer,
 allocator: Allocator,
 
@@ -48,7 +58,6 @@ pub fn init(allocator: Allocator) Self {
         .entity_to_archetype = .init(allocator),
 
         .systems = .init(allocator),
-        .system_batch_thread_pool = null,
 
         .mutex = .{},
         .command_buffer = .init(allocator),
@@ -67,11 +76,6 @@ pub fn deinit(self: *Self) void {
     self.type_bit_index_set.deinit();
     self.component_sizes.deinit();
     self.available_entity_ids.deinit();
-
-    if (self.system_batch_thread_pool) |pool| {
-        pool.deinit();
-        self.allocator.destroy(pool);
-    }
 
     self.command_buffer.deinit();
 
@@ -288,25 +292,6 @@ fn removeEntity(self: *Self, entity: Entity) void {
     self.available_entity_ids.append(entity) catch {};
 }
 
-fn resizeBatchPool(self: *Self, batch_count: usize) void {
-    if (self.system_batch_thread_pool) |pool| {
-        pool.deinit();
-        self.allocator.destroy(pool);
-    }
-    self.system_batch_thread_pool = null;
-
-    const pool = self.allocator.create(std.Thread.Pool) catch return;
-    pool.init(.{
-        .allocator = self.allocator,
-        .n_jobs = batch_count,
-    }) catch {
-        self.allocator.destroy(pool);
-        return;
-    };
-
-    self.system_batch_thread_pool = pool;
-}
-
 fn addSystem(self: *Self, stage: Stage, system: System) !void {
     const at = core.types.coerceTo(usize, stage).?;
 
@@ -315,8 +300,6 @@ fn addSystem(self: *Self, stage: Stage, system: System) !void {
 
     const info = self.systems.getPtr(at) orelse return;
     try info.addSystem(system);
-
-    self.resizeBatchPool(info.batches.len());
 }
 
 fn removeSystem(self: *Self, stage: Stage, system: System) void {
@@ -335,24 +318,37 @@ pub fn runStage(self: *Self, stage: Stage) !void {
 
     const at = core.types.coerceTo(usize, stage).?;
     const stage_info = self.systems.getPtr(at) orelse return;
-    if (stage_info.batches.len() == 0) return;
+    const batches = stage_info.batches.items();
+    if (batches.len == 0) return;
 
-    if (self.system_batch_thread_pool == null)
-        self.resizeBatchPool(stage_info.batches.len());
-
-    const pool = if (self.system_batch_thread_pool) |p| p else {
-        @branchHint(.cold);
-        std.log.err("thread pool failed to initialise", .{});
+    if (batches.len == 1) {
+        self.executeBatch(batches[0].items());
         return;
-    };
-
-    var wg: std.Thread.WaitGroup = .{};
-
-    for (stage_info.batches.items()) |batch| {
-        pool.spawnWg(&wg, executeBatch, .{ self, batch.items() });
     }
 
-    wg.wait();
+    var threads = self.allocator.alloc(std.Thread, batches.len - 1) catch {
+        for (batches) |batch| {
+            self.executeBatch(batch.items());
+        }
+        return;
+    };
+    defer self.allocator.free(threads);
+
+    var spawned_count: usize = 0;
+    for (batches[1..]) |batch| {
+        if (std.Thread.spawn(.{}, executeBatch, .{ self, batch.items() })) |t| {
+            threads[spawned_count] = t;
+            spawned_count += 1;
+        } else |_| {
+            self.executeBatch(batch.items());
+        }
+    }
+
+    self.executeBatch(batches[0].items());
+
+    for (threads[0..spawned_count]) |t| {
+        t.join();
+    }
 }
 
 /// Called from the thread pool — one invocation per batch.

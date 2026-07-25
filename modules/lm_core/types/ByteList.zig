@@ -129,24 +129,23 @@ pub fn pop(self: *Self) ?[]const u8 {
     if (self.bytes.len() == 0) return null;
 
     const out = self.getAsBytes(self.len() - 1);
-    self.bytes.shrinkRetainingCapacity((self.len() - 1) * self.entry_size);
+    self.bytes.arrlist.items.len -= self.entry_size;
 
     return out;
 }
 
 pub fn swapRemove(self: *Self, index: usize) void {
-    if (self.entry_size == 0) {
-        self.bytes.shrinkRetainingCapacity((self.len() - 1) * self.entry_size);
-        return;
-    }
+    const current_len = self.len();
+    if (current_len == 0 or index >= current_len) return;
 
-    if (self.len() - 1 == index) {
-        _ = self.pop();
-        return;
+    if (current_len - 1 != index) {
+        const last_index = current_len - 1;
+        @memcpy(
+            self.bytes.items()[index * self.entry_size ..][0..self.entry_size],
+            self.bytes.items()[last_index * self.entry_size ..][0..self.entry_size],
+        );
     }
-
-    const bytes = self.pop() orelse return;
-    self.set(index, bytes.ptr);
+    self.bytes.arrlist.items.len -= self.entry_size;
 }
 
 pub fn iterator(self: *Self) ByteIterator {

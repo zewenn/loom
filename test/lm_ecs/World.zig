@@ -12,6 +12,17 @@ const Health = struct { value: u32 };
 const Tag = struct { id: u8 };
 
 /// Attach components to an existing entity and flush immediately.
+fn newEntity(world: *World) !Entity {
+    const expected_id: Entity = if (world.available_entity_ids.len() > 0)
+        world.available_entity_ids.items()[world.available_entity_ids.len() - 1]
+    else
+        world.next_entity_index;
+
+    try world.command_buffer.makeEntity(.{});
+    try world.flushCommandBuffer();
+    return expected_id;
+}
+
 fn spawn(world: *World, entity: Entity, components: anytype) !void {
     if (!@import("lm_core").types.isTuple(components))
         @compileError("components must be a tuple");
@@ -25,9 +36,9 @@ test "newEntity: each call returns a unique ID" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
-    const c = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
+    const c = try newEntity(&world);
 
     try testing.expect(a != b);
     try testing.expect(a != c);
@@ -38,7 +49,7 @@ test "isEntityAlive: true immediately after newEntity" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try testing.expect(world.isEntityAlive(e));
 }
 
@@ -53,7 +64,7 @@ test "removeEntity: entity is dead after the command is applied" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try world.command_buffer.removeEntity(e);
     try world.flushCommandBuffer();
 
@@ -64,7 +75,7 @@ test "removeEntity: removing an already-dead entity is a no-op" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try world.command_buffer.removeEntity(e);
     try world.flushCommandBuffer();
 
@@ -78,9 +89,9 @@ test "removeEntity: other entities are unaffected" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
-    const c = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
+    const c = try newEntity(&world);
 
     try world.command_buffer.removeEntity(b);
     try world.flushCommandBuffer();
@@ -94,11 +105,11 @@ test "entity IDs are recycled after removal" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const first = try world.newEntity();
+    const first = try newEntity(&world);
     try world.command_buffer.removeEntity(first);
     try world.flushCommandBuffer();
 
-    const recycled = try world.newEntity();
+    const recycled = try newEntity(&world);
     try testing.expectEqual(first, recycled);
     try testing.expect(world.isEntityAlive(recycled));
 }
@@ -107,7 +118,7 @@ test "component is not visible before applyCommandBuffer" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try world.command_buffer.addComponent(e, Position{ .x = 1, .y = 2 });
 
     try testing.expectEqual(@as(?*Position, null), world.getComponent(Position, e));
@@ -121,7 +132,7 @@ test "entity spawned via makeEntity is not alive until applyCommandBuffer" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const pre_existing = try world.newEntity();
+    const pre_existing = try newEntity(&world);
     try world.command_buffer.makeEntity(.{Position{ .x = 0, .y = 0 }});
 
     try world.flushCommandBuffer();
@@ -133,7 +144,7 @@ test "getComponent: returns null for an entity with no components" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try testing.expectEqual(@as(?*Position, null), world.getComponent(Position, e));
 }
 
@@ -141,7 +152,7 @@ test "getComponent: returns null for a type the entity does not have" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     try testing.expectEqual(@as(?*Health, null), world.getComponent(Health, e));
@@ -151,7 +162,7 @@ test "getComponent: returns null for a dead entity" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     try world.command_buffer.removeEntity(e);
@@ -164,7 +175,7 @@ test "getComponent: correct value is returned after add" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 3.14, .y = -2.71 }});
 
     const pos = world.getComponent(Position, e) orelse return error.TestUnexpectedNull;
@@ -176,7 +187,7 @@ test "getComponent: multiple components on the same entity are all accessible" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{
         Position{ .x = 1, .y = 2 },
         Velocity{ .x = 3, .y = 4 },
@@ -192,8 +203,8 @@ test "getComponent: separate entities have independent component data" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
 
     try spawn(&world, a, .{Position{ .x = 1, .y = 1 }});
     try spawn(&world, b, .{Position{ .x = 2, .y = 2 }});
@@ -206,7 +217,7 @@ test "getComponent: returned pointer is live — mutation persists" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     world.getComponent(Position, e).?.x = 99.0;
@@ -218,7 +229,7 @@ test "adding the same component twice overwrites the first value" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 1, .y = 1 }});
     try spawn(&world, e, .{Position{ .x = 42, .y = -7 }});
 
@@ -231,7 +242,7 @@ test "overwriting a component does not disturb other components" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{
         Position{ .x = 5, .y = 5 },
         Health{ .value = 50 },
@@ -245,7 +256,7 @@ test "removeComponent: component is inaccessible after removal" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 1, .y = 1 }});
 
     try world.command_buffer.removeComponent(e, Position);
@@ -258,7 +269,7 @@ test "removeComponent: surviving components are still accessible" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{
         Position{ .x = 3, .y = 4 },
         Health{ .value = 77 },
@@ -275,7 +286,7 @@ test "removeComponent: removing a component the entity does not have is a no-op"
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 1, .y = 1 }});
 
     try world.command_buffer.removeComponent(e, Health);
@@ -289,7 +300,7 @@ test "removeComponent: entity is still alive after its last component is removed
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     try world.command_buffer.removeComponent(e, Position);
@@ -302,7 +313,7 @@ test "adding a component back after removal gives the new value" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Health{ .value = 10 }});
 
     try world.command_buffer.removeComponent(e, Health);
@@ -317,7 +328,7 @@ test "adding a second component preserves the first" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 7, .y = 8 }});
     try spawn(&world, e, .{Velocity{ .x = -1, .y = -2 }});
 
@@ -330,7 +341,7 @@ test "removing one component preserves the values of all others" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{
         Position{ .x = 1, .y = 2 },
         Velocity{ .x = 3, .y = 4 },
@@ -349,8 +360,8 @@ test "component data on a bystander entity is unchanged across neighbour transit
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
 
     try spawn(&world, a, .{Position{ .x = 1, .y = 1 }});
     try spawn(&world, b, .{Position{ .x = 2, .y = 2 }});
@@ -365,7 +376,7 @@ test "round-trip: add, remove, re-add a component produces the new value" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
 
     try spawn(&world, e, .{Health{ .value = 1 }});
     try world.command_buffer.removeComponent(e, Health);
@@ -471,9 +482,9 @@ test "runStage: system runs on all entities with the required component" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
-    const c = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
+    const c = try newEntity(&world);
 
     try spawn(&world, a, .{Position{ .x = 0, .y = 0 }});
     try spawn(&world, b, .{Position{ .x = 0, .y = 0 }});
@@ -492,8 +503,8 @@ test "runStage: system skips entities missing a required component" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const with_pos = try world.newEntity();
-    const without_pos = try world.newEntity();
+    const with_pos = try newEntity(&world);
+    const without_pos = try newEntity(&world);
 
     try spawn(&world, with_pos, .{Position{ .x = 0, .y = 0 }});
     try spawn(&world, without_pos, .{Health{ .value = 10 }});
@@ -511,9 +522,9 @@ test "runStage: multi-component system skips entities missing any one component"
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const both = try world.newEntity();
-    const pos_only = try world.newEntity();
-    const vel_only = try world.newEntity();
+    const both = try newEntity(&world);
+    const pos_only = try newEntity(&world);
+    const vel_only = try newEntity(&world);
 
     try spawn(&world, both, .{
         Position{ .x = 0, .y = 0 },
@@ -535,7 +546,7 @@ test "runStage: system does not run in a stage it was not registered for" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     try world.command_buffer.addSystem(.update, countPositions);
@@ -552,7 +563,7 @@ test "runStage: multiple systems in the same stage all execute" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     try world.command_buffer.addSystem(.update, countPositions);
@@ -569,7 +580,7 @@ test "runStage: system correctly mutates component data" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{
         Position{ .x = 0, .y = 0 },
         Velocity{ .x = 3, .y = -1 },
@@ -588,7 +599,7 @@ test "runStage: mutation accumulates across multiple stage runs" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{
         Position{ .x = 0, .y = 0 },
         Velocity{ .x = 1, .y = 2 },
@@ -610,8 +621,8 @@ test "runStage: removed entity is not visited in subsequent stage runs" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
 
     try spawn(&world, a, .{Position{ .x = 0, .y = 0 }});
     try spawn(&world, b, .{Position{ .x = 0, .y = 0 }});
@@ -635,8 +646,8 @@ test "runStage: entity whose component is removed is not visited by that system 
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
 
     try spawn(&world, a, .{Position{ .x = 0, .y = 0 }});
     try spawn(&world, b, .{
@@ -669,7 +680,7 @@ test "runStage: system sees newly added entity on the stage after it is created"
     try world.runStage(.update);
     try testing.expectEqual(@as(usize, 0), g_visited_count);
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     try world.runStage(.update);
@@ -681,7 +692,7 @@ test "removed system does not run in subsequent stages" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
     try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
 
     try world.command_buffer.addSystem(.update, countPositions);
@@ -703,7 +714,7 @@ test "stress: many entities with different component combinations are all handle
     defer world.deinit();
 
     var ids: [10]Entity = undefined;
-    for (&ids) |*id| id.* = try world.newEntity();
+    for (&ids) |*id| id.* = try newEntity(&world);
 
     for (ids[0..3]) |id| try spawn(&world, id, .{Position{ .x = 1, .y = 1 }});
     for (ids[3..6]) |id| try spawn(&world, id, .{
@@ -740,7 +751,7 @@ test "stress: interleaved add, remove, overwrite across multiple applies" {
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const e = try world.newEntity();
+    const e = try newEntity(&world);
 
     try spawn(&world, e, .{Position{ .x = 1, .y = 0 }});
     try spawn(&world, e, .{Health{ .value = 10 }});
@@ -770,11 +781,11 @@ test "stress: system visit count matches entity count across archetype boundarie
     try world.flushCommandBuffer();
 
     for (0..3) |_| {
-        const e = try world.newEntity();
+        const e = try newEntity(&world);
         try spawn(&world, e, .{Position{ .x = 0, .y = 0 }});
     }
     for (0..2) |_| {
-        const e = try world.newEntity();
+        const e = try newEntity(&world);
         try spawn(&world, e, .{
             Position{ .x = 0, .y = 0 },
             Health{ .value = 1 },
@@ -790,8 +801,8 @@ test "stress: mutation system applied to multiple archetypes all update correctl
     var world = World.init(testing.allocator);
     defer world.deinit();
 
-    const a = try world.newEntity();
-    const b = try world.newEntity();
+    const a = try newEntity(&world);
+    const b = try newEntity(&world);
 
     try spawn(&world, a, .{
         Position{ .x = 0, .y = 0 },

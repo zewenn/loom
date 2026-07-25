@@ -29,10 +29,22 @@ const Command = union(enum) {
     remove_system: struct { stage: Stage, system: System },
 };
 
+const Mutex = struct {
+    impl: std.Io.Mutex = .init,
+
+    pub fn lock(self: *Mutex) void {
+        std.Io.Threaded.mutexLock(&self.impl);
+    }
+
+    pub fn unlock(self: *Mutex) void {
+        std.Io.Threaded.mutexUnlock(&self.impl);
+    }
+};
+
 pub const CommandBuffer = struct {
     const Self = @This();
 
-    mutex: std.Thread.Mutex,
+    mutex: Mutex,
     commands: core.List(Command),
     data: core.List(u8), // Raw component data storage
     allocator: Allocator,
