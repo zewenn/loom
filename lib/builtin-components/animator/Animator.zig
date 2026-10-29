@@ -54,43 +54,10 @@ pub fn Update(self: *Self, _: *lm.Entity) !void {
             break;
         }
 
-        const current = animation.current();
-        const next = animation.next();
-
-        const current_keyframe = current orelse continue;
-        const next_keyframe = next orelse {
-            current_keyframe.apply(transform, display);
-            animation.playing = false;
-            continue;
-        };
-
-        const interpolation_factor =
-            @min(1, @max(0, (lm.time.gameTime() - lm.tof32(animation.start_time)) / lm.tof32(animation.length)));
-
-        const animation_progress_percent = animation.timing_function(0, 1, interpolation_factor);
-        const next_index_percent = animation.timing_function(0, 1, lm.tof32(animation.next_index) / 100);
-        const current_index_percent = animation.timing_function(0, 1, lm.tof32(animation.current_index) / 100);
-
-        const percent = @min(1, @max(0, (animation_progress_percent - current_index_percent) / (next_index_percent - current_index_percent)));
-
-        const interpolated_keyframe = current_keyframe
-            .interpolate(next_keyframe, shared.interpolation.lerp, percent);
-
-        interpolated_keyframe.apply(transform, display);
-
-        if (percent != 1) continue;
-
-        animation.incrementCurrentPercent(lm.toi32(interpolation_factor * 100));
+        self.updateAnimation(animation, transform, display);
     }
 
-    const playing_count = self.playing.len();
-    for (1..playing_count + 1) |offset| {
-        const index = playing_count - offset;
-        const item = self.playing.items()[index];
-
-        if (item.playing) continue;
-        _ = self.playing.swapRemove(index);
-    }
+    self.cleanupFinishedAnimations();
 }
 
 pub fn End(self: *Self) !void {
@@ -114,9 +81,9 @@ pub fn deinit(self: *Self) void {
     self.clearAllSpriteCaches();
     self.sprite_cache.deinit();
 
-    for (self.animations.items()) |item| {
-        item.deinit();
-        self.alloc.destroy(item);
+    for (self.animations.items()) |animation| {
+        animation.deinit();
+        self.alloc.destroy(animation);
     }
 
     self.playing.deinit();
@@ -145,8 +112,8 @@ pub fn chain(self: *Self, animation: Animation) !void {
 pub fn isPlaying(self: *Self, name: []const u8) bool {
     if (!self.alive) return false;
 
-    for (self.animations.items()) |item| {
-        if (std.mem.eql(u8, item.name, name)) return item.playing;
+    for (self.animations.items()) |animation| {
+        if (std.mem.eql(u8, animation.name, name)) return animation.playing;
     }
 
     return false;
@@ -162,7 +129,7 @@ pub fn play(self: *Self, name: []const u8) !void {
         try self.playing.append(animation);
 
         animation.playing = true;
-        animation.current_percent = 0;
+        animation.current_percent = 0.0;
         animation.start_time = lm.time.gameTime();
 
         break;
@@ -176,15 +143,74 @@ pub fn stop(self: *Self, name: []const u8) void {
         if (!std.mem.eql(u8, animation.name, name)) continue;
         if (!animation.playing) return;
 
-        for (self.playing.items(), 0..) |item, index| {
-            if (item.uuid != animation.uuid) continue;
-
-            _ = self.playing.swapRemove(index);
-            break;
-        }
-
+        self.removePlayingAnimation(animation.uuid);
         animation.playing = false;
-        break;
+        return;
+    }
+}
+
+fn removePlayingAnimation(self: *Self, target_uuid: u128) void {
+    for (self.playing.items(), 0..) |animation, animation_index| {
+        if (animation.uuid != target_uuid) continue;
+
+        _ = self.playing.swapRemove(animation_index);
+        return;
+    }
+}
+
+fn updateAnimation(
+    self: *Self,
+    animation: *Animation,
+    transform: *lm.Transform,
+    display: *lm.Renderer,
+) void {
+    _ = self;
+    const current_keyframe = animation.current() orelse return;
+    const next = animation.next();
+
+    const next_keyframe = next orelse {
+        current_keyframe.apply(transform, display);
+        animation.playing = false;
+        return;
+    };
+
+    const elapsed_seconds = lm.time.gameTime() - lm.tof32(animation.start_time);
+    const duration_seconds = lm.tof32(animation.length);
+    const raw_factor = if (duration_seconds > 0.0) elapsed_seconds / duration_seconds else 1.0;
+    const interpolation_factor = @min(1.0, @max(0.0, raw_factor));
+
+    const animation_progress_percent = animation.timing_function(0.0, 1.0, interpolation_factor);
+    const next_index_percent = animation.timing_function(0.0, 1.0, animation.next_index);
+    const current_index_percent = animation.timing_function(0.0, 1.0, animation.current_index);
+
+    const progress_span = next_index_percent - current_index_percent;
+    const percent = if (progress_span > 0.0)
+        @min(1.0, @max(0.0, (animation_progress_percent - current_index_percent) / progress_span))
+    else
+        1.0;
+
+    const interpolated_keyframe = current_keyframe
+        .interpolate(next_keyframe, shared.interpolation.lerp, percent);
+
+    interpolated_keyframe.apply(transform, display);
+
+    if (percent < 1.0) return;
+
+    animation.incrementCurrentPercent(interpolation_factor);
+
+    if (animation.loop and interpolation_factor >= 1.0) {
+        animation.start_time = lm.time.gameTime();
+    }
+}
+
+fn cleanupFinishedAnimations(self: *Self) void {
+    const playing_count = self.playing.len();
+    for (1..playing_count + 1) |offset| {
+        const index = playing_count - offset;
+        const animation = self.playing.items()[index];
+
+        if (animation.playing) continue;
+        _ = self.playing.swapRemove(index);
     }
 }
 
@@ -221,9 +247,8 @@ fn cacheAnimationSprites(self: *Self, animation: *Animation) void {
     const modifiers = [_]i32{ lm.toi32(tile_size.x), lm.toi32(tile_size.y) };
 
     if (animation.keyframes) |*keyframes| {
-        var keyframe_iterator = keyframes.iterator();
-        while (keyframe_iterator.next()) |entry| {
-            const path = entry.value_ptr.sprite orelse continue;
+        for (keyframes.items()) |entry| {
+            const path = entry.keyframe.sprite orelse continue;
             self.cacheSprite(animation.uuid, path, &modifiers);
         }
         return;

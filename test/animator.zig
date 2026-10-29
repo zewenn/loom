@@ -7,68 +7,94 @@ const expectEqual = testing.expectEqual;
 const expectEqualStrings = testing.expectEqualStrings;
 
 test "Keyframe sprite interpolation order" {
-    const kf1 = lm.Keyframe{ .sprite = "frame_a.png" };
-    const kf2 = lm.Keyframe{ .sprite = "frame_b.png" };
+    const first_keyframe = lm.Keyframe{ .sprite = "frame_a.png" };
+    const second_keyframe = lm.Keyframe{ .sprite = "frame_b.png" };
 
-    const interp_start = kf1.interpolate(kf2, lm.interpolation.lerp, 0.0);
-    try expectEqualStrings("frame_a.png", interp_start.sprite.?);
+    const interpolated_start = first_keyframe.interpolate(second_keyframe, lm.interpolation.lerp, 0.0);
+    try expectEqualStrings("frame_a.png", interpolated_start.sprite.?);
 
-    const interp_mid = kf1.interpolate(kf2, lm.interpolation.lerp, 0.5);
-    try expectEqualStrings("frame_a.png", interp_mid.sprite.?);
+    const interpolated_middle = first_keyframe.interpolate(second_keyframe, lm.interpolation.lerp, 0.5);
+    try expectEqualStrings("frame_a.png", interpolated_middle.sprite.?);
 
-    const interp_past_mid = kf1.interpolate(kf2, lm.interpolation.lerp, 0.51);
-    try expectEqualStrings("frame_b.png", interp_past_mid.sprite.?);
+    const interpolated_past_middle = first_keyframe.interpolate(second_keyframe, lm.interpolation.lerp, 0.51);
+    try expectEqualStrings("frame_b.png", interpolated_past_middle.sprite.?);
 
-    const interp_end = kf1.interpolate(kf2, lm.interpolation.lerp, 1.0);
-    try expectEqualStrings("frame_b.png", interp_end.sprite.?);
+    const interpolated_end = first_keyframe.interpolate(second_keyframe, lm.interpolation.lerp, 1.0);
+    try expectEqualStrings("frame_b.png", interpolated_end.sprite.?);
 }
 
 test "Animation single keyframe close" {
-    var anim = lm.Animation.init("single", 1.0, lm.interpolation.lerp, &.{
+    var animation = lm.Animation.init("single", 1.0, lm.interpolation.lerp, &.{
         lm.Keyframe{ .sprite = "only_frame.png" },
     });
-    defer anim.deinit();
+    defer animation.deinit();
 
-    for (anim.base_keyframes) |kf| {
-        _ = anim.append(kf);
+    for (animation.base_keyframes) |keyframe| {
+        _ = animation.append(keyframe);
     }
-    anim.close();
+    animation.close();
 
-    const curr = anim.current();
-    try expect(curr != null);
-    try expectEqualStrings("only_frame.png", curr.?.sprite.?);
+    const current_keyframe = animation.current();
+    try expect(current_keyframe != null);
+    try expectEqualStrings("only_frame.png", current_keyframe.?.sprite.?);
 
-    const nxt = anim.next();
-    try expect(nxt == null);
+    const next_keyframe = animation.next();
+    try expect(next_keyframe == null);
 }
 
 test "Animation zero keyframe close does not crash" {
-    var anim = lm.Animation.init("empty", 1.0, lm.interpolation.lerp, &.{});
-    defer anim.deinit();
+    var unclosed_animation = lm.Animation.init("empty", 1.0, lm.interpolation.lerp, &.{});
+    defer unclosed_animation.deinit();
 
-    _ = anim.append(lm.Keyframe{ .sprite = "dummy.png" });
-    // Remove or test with empty unregistered
-    var empty_anim = lm.Animation.init("empty2", 1.0, lm.interpolation.lerp, &.{});
-    defer empty_anim.deinit();
-    empty_anim.close();
+    _ = unclosed_animation.append(lm.Keyframe{ .sprite = "dummy.png" });
 
-    try expect(empty_anim.keys == null);
+    var empty_animation = lm.Animation.init("empty2", 1.0, lm.interpolation.lerp, &.{});
+    defer empty_animation.deinit();
+    empty_animation.close();
+
+    try expect(empty_animation.keys == null);
 }
 
 test "Animation multiple keyframes close" {
-    var anim = lm.Animation.init("multi", 1.0, lm.interpolation.lerp, &.{
+    var animation = lm.Animation.init("multi", 1.0, lm.interpolation.lerp, &.{
         lm.Keyframe{ .sprite = "frame_1.png" },
         lm.Keyframe{ .sprite = "frame_2.png" },
     });
-    defer anim.deinit();
+    defer animation.deinit();
 
-    for (anim.base_keyframes) |kf| {
-        _ = anim.append(kf);
+    for (animation.base_keyframes) |keyframe| {
+        _ = animation.append(keyframe);
     }
-    anim.close();
+    animation.close();
 
-    try expect(anim.keys != null);
-    try expectEqual(@as(usize, 2), anim.keys.?.len);
-    try expectEqual(@as(i32, 0), anim.keys.?[0]);
-    try expectEqual(@as(i32, 10), anim.keys.?[1]);
+    try expect(animation.keys != null);
+    try expectEqual(@as(usize, 2), animation.keys.?.len);
+    try expectEqual(@as(f32, 0.0), animation.keys.?[0]);
+    try expectEqual(@as(f32, 1.0), animation.keys.?[1]);
+}
+
+test "Animation supports arbitrary number of keyframes" {
+    var animation = lm.Animation.init("many_frames", 2.0, lm.interpolation.lerp, &.{});
+    defer animation.deinit();
+
+    for (0..250) |_| {
+        _ = animation.append(lm.Keyframe{ .sprite = "dummy_frame.png" });
+    }
+    animation.close();
+
+    try expect(animation.keys != null);
+    try expectEqual(@as(usize, 250), animation.keys.?.len);
+    try expectEqual(@as(f32, 0.0), animation.keys.?[0]);
+    try expectEqual(@as(f32, 1.0), animation.keys.?[249]);
+
+    for (1..250) |key_index| {
+        try expect(animation.keys.?[key_index] > animation.keys.?[key_index - 1]);
+    }
+
+    animation.current_percent = 0.5;
+    const current_keyframe = animation.current();
+    try expect(current_keyframe != null);
+
+    const next_keyframe = animation.next();
+    try expect(next_keyframe != null);
 }
