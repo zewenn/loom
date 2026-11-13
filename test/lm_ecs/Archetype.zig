@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const core = @import("lm_core");
+const lm_types = @import("lm_types");
 const ecs = @import("lm_ecs");
 const Archetype = ecs.Archetype;
 
@@ -10,15 +10,15 @@ const Velocity = struct { x: f32, y: f32 };
 const Health = struct { value: u32 };
 const Tag = struct { id: u8 };
 
-const pos_hash = core.type_erasure.typeToHash(Position);
-const vel_hash = core.type_erasure.typeToHash(Velocity);
-const hp_hash = core.type_erasure.typeToHash(Health);
-const tag_hash = core.type_erasure.typeToHash(Tag);
+const pos_hash = lm_types.type_erasure.typeToHash(Position);
+const vel_hash = lm_types.type_erasure.typeToHash(Velocity);
+const hp_hash = lm_types.type_erasure.typeToHash(Health);
+const tag_hash = lm_types.type_erasure.typeToHash(Tag);
 
-const pos_size = core.type_erasure.alignedSize(Position);
-const vel_size = core.type_erasure.alignedSize(Velocity);
-const hp_size = core.type_erasure.alignedSize(Health);
-const tag_size = core.type_erasure.alignedSize(Tag);
+const pos_size = lm_types.type_erasure.alignedSize(Position);
+const vel_size = lm_types.type_erasure.alignedSize(Velocity);
+const hp_size = lm_types.type_erasure.alignedSize(Health);
+const tag_size = lm_types.type_erasure.alignedSize(Tag);
 
 const POS_BIT: u128 = 1 << 0;
 const VEL_BIT: u128 = 1 << 1;

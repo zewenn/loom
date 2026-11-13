@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const core = @import("lm_core");
+const lm_types = @import("lm_types");
 const ecs = @import("root.zig");
 
 const Stage = ecs.Stage;
@@ -33,7 +33,7 @@ const Mutex = struct {
     impl: std.Io.Mutex = .init,
 
     pub fn lock(self: *Mutex) void {
-        std.Io.Threaded.mutexLock(&self.impl);
+        std.Io.Threaded.mutexLock(&self.impl) catch unreachable;
     }
 
     pub fn unlock(self: *Mutex) void {
@@ -45,8 +45,8 @@ pub const CommandBuffer = struct {
     const Self = @This();
 
     mutex: Mutex,
-    commands: core.List(Command),
-    data: core.List(u8), // Raw component data storage
+    commands: lm_types.List(Command),
+    data: lm_types.List(u8), // Raw component data storage
     allocator: Allocator,
 
     pub fn init(allocator: Allocator) CommandBuffer {
@@ -69,14 +69,14 @@ pub const CommandBuffer = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (!core.types.isTuple(components)) @compileError("components must be a tuple");
+        if (!lm_types.types.isTuple(components)) @compileError("components must be a tuple");
 
-        var list = core.List(ComponentDescriptor).init(self.allocator);
+        var list = lm_types.List(ComponentDescriptor).init(self.allocator);
         defer list.deinit();
 
         inline for (components) |component| {
             const T: type = @TypeOf(component);
-            const hash = comptime core.type_erasure.typeToHash(T);
+            const hash = comptime lm_types.type_erasure.typeToHash(T);
             const size = @sizeOf(T);
 
             const offset = self.data.len();
@@ -97,7 +97,7 @@ pub const CommandBuffer = struct {
         defer self.mutex.unlock();
 
         const T = @TypeOf(component);
-        const hash = comptime core.type_erasure.typeToHash(T);
+        const hash = comptime lm_types.type_erasure.typeToHash(T);
         const size = @sizeOf(T);
 
         const offset = self.data.len();
@@ -117,11 +117,11 @@ pub const CommandBuffer = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (!core.types.isTuple(components)) @compileError("components must be a tuple");
+        if (!lm_types.types.isTuple(components)) @compileError("components must be a tuple");
 
         inline for (components) |component| {
             const T: type = @TypeOf(component);
-            const hash = comptime core.type_erasure.typeToHash(T);
+            const hash = comptime lm_types.type_erasure.typeToHash(T);
             const size = @sizeOf(T);
 
             const offset = self.data.len();
@@ -164,7 +164,7 @@ pub const CommandBuffer = struct {
         try self.commands.append(.{
             .remove_component = .{
                 .entity = entity,
-                .type_hash = comptime core.type_erasure.typeToHash(T),
+                .type_hash = comptime lm_types.type_erasure.typeToHash(T),
             },
         });
     }

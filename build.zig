@@ -172,20 +172,20 @@ pub fn build(b: *std.Build) !void {
     });
     bench_module.addImport("loom", loom_mod);
 
-    const core = builder.module(b, "lm_core", .{
+    const types_mod = builder.module(b, "lm_types", .{
         .target = target,
         .optimize = optimize,
     });
-    const core_import = Import{ .name = "lm_core", .module = core };
-    loom_mod.addImport("lm_core", core);
-    test_module.addImport("lm_core", core);
-    bench_module.addImport("lm_core", core);
+    const types_import = Import{ .name = "lm_types", .module = types_mod };
+    loom_mod.addImport("lm_types", types_mod);
+    test_module.addImport("lm_types", types_mod);
+    bench_module.addImport("lm_types", types_mod);
 
     const modules: []const []const u8 = &.{
         "lm_ecs",
         "lm_uuid",
+        "lm_benchmarking",
     };
-    // TODO: rework benchmarking
 
     inline for (modules) |mod_name| {
         builder.link(b, &.{ loom_mod, test_module, bench_module }, mod_name, .{
@@ -193,7 +193,7 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
 
-            .imports = &.{core_import},
+            .imports = &.{types_import},
         });
     }
 

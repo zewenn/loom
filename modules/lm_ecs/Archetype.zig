@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const core = @import("lm_core");
+const lm_types = @import("lm_types");
 const ecs = @import("root.zig");
 
 const Self = @This();
@@ -13,15 +13,15 @@ mask: u128,
 component_hashes: []u64,
 
 /// Dense list of entities currently in this archetype, parallel to each column's rows.
-entities: core.List(ecs.Entity),
+entities: lm_types.List(ecs.Entity),
 
 /// One `ByteList` per component type, in the same order as `component_hashes`.
 /// `columns[i][row]` is the component data for `entities[row]` of type `component_hashes[i]`.
-columns: core.List(core.ByteList),
+columns: lm_types.List(lm_types.ByteList),
 
 /// Sparse map: entity ID -> row index within this archetype's columns.
 /// Uses a `PagedList` so it stays memory-efficient for sparse entity ID ranges.
-entity_to_row: core.types.PagedList(usize, 1024),
+entity_to_row: lm_types.types.PagedList(usize, 1024),
 
 allocator: Allocator,
 
@@ -37,14 +37,14 @@ pub fn init(
     const owned_hashes = try allocator.dupe(u64, component_hashes);
     errdefer allocator.free(owned_hashes);
 
-    var columns: core.List(core.ByteList) = .init(allocator);
+    var columns: lm_types.List(lm_types.ByteList) = .init(allocator);
     errdefer {
         for (columns.items()) |*col| col.deinit();
         columns.deinit();
     }
 
     for (component_hashes, component_sizes) |hash, size| {
-        try columns.append(core.ByteList.initWithInfo(allocator, hash, size));
+        try columns.append(lm_types.ByteList.initWithInfo(allocator, hash, size));
     }
 
     return Self{
@@ -187,7 +187,7 @@ pub fn getComponent(self: *Self, entity: ecs.Entity, hash: u64) ?*anyopaque {
 
 /// Get a typed pointer to a component by entity.
 pub fn getComponentAs(self: *Self, comptime T: type, entity: ecs.Entity) ?*T {
-    const hash = comptime core.type_erasure.typeToHash(T);
+    const hash = comptime lm_types.type_erasure.typeToHash(T);
     const row = self.entity_to_row.get(entity) orelse return null;
     const col_index = self.columnIndex(hash) orelse return null;
     return self.columns.items()[col_index].getAs(T, row);
@@ -207,7 +207,7 @@ pub fn setComponent(self: *Self, entity: ecs.Entity, hash: u64, data: *const any
 
 /// Typed overwrite of a component value.
 pub fn setComponentAs(self: *Self, comptime T: type, entity: ecs.Entity, value: T) void {
-    const hash = comptime core.type_erasure.typeToHash(T);
+    const hash = comptime lm_types.type_erasure.typeToHash(T);
     self.setComponent(entity, hash, &value);
 }
 
@@ -333,7 +333,7 @@ pub fn ComponentIterator(comptime T: type) type {
 /// Returns null if this archetype doesn't hold `T`.
 /// When the archetype is empty the iterator is valid but immediately exhausted.
 pub fn componentIterator(self: *Self, comptime T: type) ?ComponentIterator(T) {
-    const hash = comptime core.type_erasure.typeToHash(T);
+    const hash = comptime lm_types.type_erasure.typeToHash(T);
     const col_index = self.columnIndex(hash) orelse return null;
     const col = &self.columns.items()[col_index];
 

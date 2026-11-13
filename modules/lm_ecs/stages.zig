@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const core = @import("lm_core");
+const lm_types = @import("lm_types");
 const ecs = @import("root.zig");
 const System = ecs.System;
 
@@ -19,10 +19,10 @@ pub const Stage = enum {
 pub const StageInfo = struct {
     world: *ecs.World,
     max_hash_count: usize = 0,
-    systems: core.List(System),
-    batches: core.List(core.List(System)),
-    batch_read_masks: core.List(u128),
-    batch_write_masks: core.List(u128),
+    systems: lm_types.List(System),
+    batches: lm_types.List(lm_types.List(System)),
+    batch_read_masks: lm_types.List(u128),
+    batch_write_masks: lm_types.List(u128),
 
     allocator: Allocator,
 
@@ -54,7 +54,7 @@ pub const StageInfo = struct {
 
         for (hashes) |hash| {
             const bit_index = world.type_bit_index_set.getKeyByValue(hash) orelse return null;
-            const shift = core.types.coerceTo(u7, bit_index) orelse return null;
+            const shift = lm_types.types.coerceTo(u7, bit_index) orelse return null;
 
             const base_mask: u128 = 0b1;
             const shifted = base_mask << shift;

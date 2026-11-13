@@ -24,7 +24,7 @@ fn newEntity(world: *World) !Entity {
 }
 
 fn spawn(world: *World, entity: Entity, components: anytype) !void {
-    if (!@import("lm_core").types.isTuple(components))
+    if (!@import("lm_types").types.isTuple(components))
         @compileError("components must be a tuple");
     inline for (components) |c| {
         try world.command_buffer.addComponent(entity, c);

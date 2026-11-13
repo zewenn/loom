@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const core = @import("lm_core");
+const lm_types = @import("lm_types");
 const ecs = @import("root.zig");
 
 const Self = @This();

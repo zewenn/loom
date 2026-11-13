@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const core = @import("lm_core");
+const lm_types = @import("lm_types");
 const ecs = @import("root.zig");
 
 const System = ecs.System;
@@ -15,7 +15,7 @@ const Mutex = struct {
     impl: std.Io.Mutex = .init,
 
     pub fn lock(self: *Mutex) void {
-        std.Io.Threaded.mutexLock(&self.impl);
+        std.Io.Threaded.mutexLock(&self.impl) catch unreachable;
     }
 
     pub fn unlock(self: *Mutex) void {
@@ -25,18 +25,18 @@ const Mutex = struct {
 
 const Self = @This();
 
-available_entity_ids: core.List(Entity),
+available_entity_ids: lm_types.List(Entity),
 next_entity_index: usize,
 
-type_bit_index_set: core.types.SparseSet(u64),
+type_bit_index_set: lm_types.types.SparseSet(u64),
 next_component_bit_index: u7,
 component_sizes: std.AutoHashMap(u64, usize),
 
-archetypes: core.List(Archetype),
+archetypes: lm_types.List(Archetype),
 archetype_lookup: std.AutoHashMap(u128, usize),
-entity_to_archetype: core.types.PagedList(usize, 1024),
+entity_to_archetype: lm_types.types.PagedList(usize, 1024),
 
-systems: core.types.SparseSet(StageInfo),
+systems: lm_types.types.SparseSet(StageInfo),
 
 mutex: Mutex,
 command_buffer: CommandBuffer,
@@ -136,9 +136,9 @@ inline fn componentBit(self: *Self, hash: u64) ?u128 {
 fn findOrCreateArchetype(self: *Self, mask: u128) !usize {
     if (self.archetype_lookup.get(mask)) |idx| return idx;
 
-    var hashes = core.List(u64).init(self.allocator);
+    var hashes = lm_types.List(u64).init(self.allocator);
     defer hashes.deinit();
-    var sizes = core.List(usize).init(self.allocator);
+    var sizes = lm_types.List(usize).init(self.allocator);
     defer sizes.deinit();
 
     var bit: u7 = 0;
@@ -293,7 +293,7 @@ fn removeEntity(self: *Self, entity: Entity) void {
 }
 
 fn addSystem(self: *Self, stage: Stage, system: System) !void {
-    const at = core.types.coerceTo(usize, stage).?;
+    const at = lm_types.types.coerceTo(usize, stage).?;
 
     if (!self.systems.contains(at))
         try self.systems.set(at, StageInfo.init(self.allocator, self));
@@ -303,7 +303,7 @@ fn addSystem(self: *Self, stage: Stage, system: System) !void {
 }
 
 fn removeSystem(self: *Self, stage: Stage, system: System) void {
-    const at = core.types.coerceTo(usize, stage).?;
+    const at = lm_types.types.coerceTo(usize, stage).?;
     const info = self.systems.getPtr(at) orelse return;
     info.removeSystem(system.id);
 }
@@ -316,7 +316,7 @@ pub fn runStage(self: *Self, stage: Stage) !void {
             std.log.err("applyCommandBuffer failed: {any}", .{err});
     }
 
-    const at = core.types.coerceTo(usize, stage).?;
+    const at = lm_types.types.coerceTo(usize, stage).?;
     const stage_info = self.systems.getPtr(at) orelse return;
     const batches = stage_info.batches.items();
     if (batches.len == 0) return;
@@ -404,8 +404,8 @@ pub fn flushCommandBuffer(self: *Self) !void {
                 var entries: [129]ComponentEntry = undefined;
                 var ctx = ecs.Context{ .world = self, .entity = entity };
                 entries[0] = .{
-                    .hash = comptime core.type_erasure.typeToHash(ecs.Context),
-                    .size = core.type_erasure.alignedSize(ecs.Context),
+                    .hash = comptime lm_types.type_erasure.typeToHash(ecs.Context),
+                    .size = lm_types.type_erasure.alignedSize(ecs.Context),
                     .data = &ctx,
                 };
 
