@@ -375,18 +375,18 @@ test "removeEntity: untouched entities keep their component data after a swap-re
     try testing.expectEqual(@as(f32, 1), pos10.y);
 }
 
-test "columnPtr: returns non-null pointer after at least one entity is added" {
+test "columnBuffer: returns non-null buffer after at least one entity is added" {
     const allocator = testing.allocator;
     var arch = try makePVArch(allocator);
     defer arch.deinit();
 
     try addPV(&arch, 0, .{ .x = 7, .y = 8 }, .{ .x = 9, .y = 10 });
 
-    try testing.expect(arch.columnPtr(0) != null);
-    try testing.expect(arch.columnPtr(1) != null);
+    try testing.expect(arch.columnBuffer(0) != null);
+    try testing.expect(arch.columnBuffer(1) != null);
 }
 
-test "columnPtr: column bytes match the values added via addEntity" {
+test "columnBuffer: column bytes match the values added via addEntity" {
     const allocator = testing.allocator;
     var arch = try makePVArch(allocator);
     defer arch.deinit();
@@ -394,7 +394,7 @@ test "columnPtr: column bytes match the values added via addEntity" {
     try addPV(&arch, 0, .{ .x = 1.5, .y = 2.5 }, .{ .x = 0, .y = 0 });
     try addPV(&arch, 1, .{ .x = 3.5, .y = 4.5 }, .{ .x = 0, .y = 0 });
 
-    const col_ptr = arch.columnPtr(0) orelse return error.TestUnexpectedNull;
+    const col_ptr = arch.columnBuffer(0) orelse return error.TestUnexpectedNull;
     const slice = @as([*]Position, @ptrCast(@alignCast(col_ptr)))[0..2];
 
     const row0 = arch.entityRow(0) orelse return error.TestUnexpectedNull;
@@ -404,16 +404,16 @@ test "columnPtr: column bytes match the values added via addEntity" {
     try testing.expectEqual(@as(f32, 3.5), slice[row1].x);
 }
 
-test "columnPtrByHash: returns null for a hash not in this archetype" {
+test "columnBufferByHash: returns null for a hash not in this archetype" {
     const allocator = testing.allocator;
     var arch = try makePVArch(allocator);
     defer arch.deinit();
 
     try addPV(&arch, 0, .{ .x = 0, .y = 0 }, .{ .x = 0, .y = 0 });
-    try testing.expectEqual(@as(?[*]u8, null), arch.columnPtrByHash(hp_hash));
+    try testing.expectEqual(@as(?[*]u8, null), arch.columnBufferByHash(hp_hash));
 }
 
-test "fillColumnPtrs: succeeds when all hashes are present" {
+test "fillColumnBuffers: succeeds when all hashes are present" {
     const allocator = testing.allocator;
     var arch = try makePVArch(allocator);
     defer arch.deinit();
@@ -421,11 +421,11 @@ test "fillColumnPtrs: succeeds when all hashes are present" {
     try addPV(&arch, 0, .{ .x = 0, .y = 0 }, .{ .x = 0, .y = 0 });
 
     var out: [2][*]u8 = undefined;
-    const ok = arch.fillColumnPtrs(&.{ pos_hash, vel_hash }, &out);
+    const ok = arch.fillColumnBuffers(&.{ pos_hash, vel_hash }, &out);
     try testing.expect(ok);
 }
 
-test "fillColumnPtrs: fails when any requested hash is missing" {
+test "fillColumnBuffers: fails when any requested hash is missing" {
     const allocator = testing.allocator;
     var arch = try makePVArch(allocator);
     defer arch.deinit();
@@ -433,7 +433,7 @@ test "fillColumnPtrs: fails when any requested hash is missing" {
     try addPV(&arch, 0, .{ .x = 0, .y = 0 }, .{ .x = 0, .y = 0 });
 
     var out: [3][*]u8 = undefined;
-    const ok = arch.fillColumnPtrs(&.{ pos_hash, vel_hash, hp_hash }, &out);
+    const ok = arch.fillColumnBuffers(&.{ pos_hash, vel_hash, hp_hash }, &out);
     try testing.expect(!ok);
 }
 
